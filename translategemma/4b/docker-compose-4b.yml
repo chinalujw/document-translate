@@ -1,0 +1,24 @@
+version: "3.9"
+
+services:
+  translategemma:
+    build: .
+    image: translategemma-vllm:latest
+    container_name: translategemma-vllm
+    command: >
+      serve /models/translategemma-4b-it --host 0.0.0.0 --port 8020 --served-model-name translategemma
+      --gpu-memory-utilization 0.9 --chat-template /app/chat_template.jinja
+      --chat-template-content-format openai --max-model-len 8196 --dtype bfloat16
+      --max-num-batched-tokens 8192 --max-num-seqs 512 --enable-prefix-caching
+    ports:
+      - "8020:8020"
+    volumes:
+      - /data/.cache/modelscope/hub/models/google/translategemma-4b-it:/models/translategemma-4b-it:ro
+      - ./chat_template.jinja:/app/chat_template.jinja:ro
+    environment:
+      VLLM_API_KEY: sgl-R5tG8uI7vW9xY0zAbC2dE4fG6hJ8kL9m
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    runtime: nvidia
+    restart: unless-stopped
+    shm_size: 10g

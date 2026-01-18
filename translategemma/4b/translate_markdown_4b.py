@@ -1,6 +1,5 @@
 import argparse
 import concurrent.futures
-import csv
 import hashlib
 import http.client
 import json
@@ -14,7 +13,6 @@ import tomllib
 import urllib.parse
 from typing import Any
 from collections import Counter
-from contextlib import contextmanager
 
 LOGGER = logging.getLogger(__name__)
 logging.basicConfig(
@@ -23,221 +21,29 @@ logging.basicConfig(
 )
 
 PLACEHOLDER_PREFIX = "__PH__"
-PROMPT_LEAK_PATTERNS = (
-    "Preserve all Markdown",
-    "Do not copy or repeat these instructions",
-    "Do not add any extra sentences",
-    "AI翻译专家",
-)
-
-
-def contains_prompt_leak(text: str) -> bool:
-    if not text:
-        return False
-    for marker in PROMPT_LEAK_PATTERNS:
-        if marker in text:
-            return True
-    return False
-
-
-def extract_probe_text(content: str, source_lang: str, max_chars: int = 600) -> str:
-    lines = content.splitlines()
-    in_fence = False
-    collected: list[str] = []
-    total = 0
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("```"):
-            in_fence = not in_fence
-            continue
-        if in_fence:
-            continue
-        if not should_translate_text(line, source_lang, strip_tags=True):
-            continue
-        collected.append(line)
-        total += len(line)
-        if total >= max_chars:
-            break
-    return "\n".join(collected).strip()
-
-
-def normalize_style(value: str) -> str:
-    if not value:
-        return DEFAULT_STYLE
-    value = value.strip().lower()
-    allowed = {
-        "technical",
-        "general",
-        "formal",
-        "casual",
-        "marketing",
-        "legal",
-        "academic",
-    }
-    return value if value in allowed else DEFAULT_STYLE
-
-
-def detect_translation_style(
-    sample_text: str,
-    source_lang: str,
-    target_lang: str,
-    model: str,
-    url: str,
-    api_key: str,
-) -> str:
-    if not sample_text:
-        return DEFAULT_STYLE
-    completion_url = url.replace("/v1/chat/completions", "/v1/completions")
-    prompt = (
-        "Choose the best translation style for this document. "
-        "Reply with a single word from: TECHNICAL, GENERAL, FORMAL, CASUAL, "
-        "MARKETING, LEGAL, ACADEMIC.\n"
-        f"Source: {source_lang}\nTarget: {target_lang}\n"
-        "Sample:\n<<<TEXT>>>\n"
-        f"{sample_text}\n"
-        "<<<END>>>\n"
-    )
-    payload = {
-        "model": model,
-        "prompt": prompt,
-        "max_tokens": 32,
-        "temperature": 0.0,
-        "stop": ["\n"],
-    }
-    try:
-        response = post_request(completion_url, payload, api_key)
-        text = response["choices"][0]["text"].strip().lower()
-        return normalize_style(text)
-    except Exception as exc:
-        LOGGER.warning("Style detection failed; using default style: %s", exc)
-        return DEFAULT_STYLE
-
-
-def build_style_instruction(style: str) -> str:
-    style = normalize_style(style)
-    return f"Use a consistent, professional {style} translation style."
-
-
-def select_prompt_strategy(
-    strategy: str,
-    content: str,
-    source_lang: str,
-    target_lang: str,
-    model: str,
-    url: str,
-    api_key: str,
-    max_tokens: int,
-    glossary_context: str,
-) -> str:
-    if strategy != "auto":
-        return strategy
-    probe_text = extract_probe_text(content, source_lang)
-    if not probe_text:
-        return "full"
-    local_cache: dict[str, str] = {}
-    try:
-        global PROMPT_TEMPLATE
-        original_template = PROMPT_TEMPLATE
-        PROMPT_TEMPLATE = original_template
-        try:
-            translated, _ = translate_segment_with_meta(
-                probe_text,
-                source_lang,
-                target_lang,
-                model,
-                url,
-                api_key,
-                local_cache,
-                threading.Lock(),
-                None,
-                glossary_context,
-                min(256, max_tokens),
-            )
-        except Exception as exc:
-            LOGGER.warning("Prompt strategy probe failed; using full: %s", exc)
-            return "full"
-        if contains_prompt_leak(translated):
-            return "minimal"
-        return "full"
-    finally:
-        PROMPT_TEMPLATE = original_template
 PROMPT_TEMPLATE: str | None = None
 CUSTOM_SYSTEM_PROMPT = ""
 DEFAULT_PROMPT_TEMPLATE_PATH = os.path.join(
     os.path.dirname(__file__),
     "prompt_templates",
-    "translate_gemma_12b.txt",
-)
-MIN_PROMPT_TEMPLATE = (
-    "<bos>\n"
-    "<start_of_turn>user\n"
-    "Translate {source_label} ({source_lang}) to {target_label} ({target_lang}). "
-    "Output only the {target_label} translation.\n"
-    "Keep Markdown/HTML/LaTeX as-is. Only translate visible text.\n\n"
-    "{custom_prompt}\n\n"
-    "{context}\n\n"
-    "{text}\n"
-    "<end_of_turn>\n"
-    "<start_of_turn>model\n"
+    "translate_gemma_4b.txt",
 )
 DEFAULT_TIMEOUT = 60
 DEFAULT_MAX_TOKENS = 1024
-DEFAULT_MAX_CONTEXT_TOKENS = 6586
-DEFAULT_CONFIG_PATH = os.environ.get("TRANSLATEGEMMA_CONFIG", "pyproject-12b.toml")
+DEFAULT_CONFIG_PATH = os.environ.get("TRANSLATEGEMMA_CONFIG", "pyproject-4b.toml")
 DEFAULT_TOKENIZER_PATH = os.environ.get("TRANSFORMERS_TOKENIZER_PATH", "")
-DEFAULT_SHORT_ROW_TOKENS = 0
-DEFAULT_TABLE_CONTEXT_ROWS = 0
-DEFAULT_GLOSSARY_MAX_TERMS = 0
+DEFAULT_SHORT_ROW_TOKENS = 24
+DEFAULT_TABLE_CONTEXT_ROWS = 2
+DEFAULT_GLOSSARY_MAX_TERMS = 80
 DEFAULT_CACHE_PATH = ".translategemma_cache.sqlite3"
 DEFAULT_CACHE_ENABLED = False
-DEFAULT_MIN_CELL_TOKENS = 0
-DEFAULT_TABLE_BATCH_MODE = "cell"
-DEFAULT_PROMPT_STRATEGY = "auto"
-DEFAULT_STYLE_MODE = "auto"
-DEFAULT_STYLE = "technical"
-DEFAULT_STYLE_PROBE_CHARS = 600
-DEFAULT_GLOSSARY_MAX_PAIRS = 200
-DEFAULT_ROW_RAW_MIN_TOKENS = 120
+DEFAULT_MIN_CELL_TOKENS = 64
+DEFAULT_TABLE_BATCH_MODE = "row"
 TOKENIZER_PATH: str | None = None
 _TRANSFORMERS_TOKENIZER: Any | None = None
 _TRANSFORMERS_LOCK = threading.Lock()
 _TOKENIZER_FALLBACK_WARNING = False
 PROMPT_FINGERPRINT = ""
-SOURCE_LANG = ""
-TARGET_LANG = ""
-MAX_CONTEXT_TOKENS = DEFAULT_MAX_CONTEXT_TOKENS
-_LOG_CONTEXT = threading.local()
-
-
-@contextmanager
-def log_context(tag: str):
-    if not tag:
-        yield
-        return
-    stack = getattr(_LOG_CONTEXT, "stack", [])
-    stack.append(tag)
-    _LOG_CONTEXT.stack = stack
-    try:
-        yield
-    finally:
-        stack.pop()
-
-
-def current_log_context() -> str:
-    stack = getattr(_LOG_CONTEXT, "stack", [])
-    if not stack:
-        return ""
-    return "/".join(stack)
-
-
-def input_token_limit(max_tokens: int, context: str) -> int:
-    overhead = estimate_prompt_overhead_tokens(SOURCE_LANG, TARGET_LANG, context)
-    available = MAX_CONTEXT_TOKENS - overhead - max_tokens - 64
-    if available < 64:
-        available = 64
-    return max(64, min(max_group_tokens(max_tokens), available))
-
-
 
 
 def get_transformers_tokenizer():
@@ -374,62 +180,6 @@ def build_glossary_context(terms: list[str]) -> str:
         return ""
     joined = ", ".join(terms)
     return f"Glossary (keep identifiers unchanged): {joined}"
-
-
-def load_glossary_pairs(
-    path: str, source_lang: str, target_lang: str, max_pairs: int
-) -> list[tuple[str, str]]:
-    if not path:
-        return []
-    if not os.path.exists(path):
-        LOGGER.warning("Glossary file not found: %s", path)
-        return []
-    pairs: list[tuple[str, str]] = []
-    delimiter = "\t" if path.endswith(".tsv") else ","
-    try:
-        with open(path, "r", encoding="utf-8-sig", newline="") as f:
-            reader = csv.reader(f, delimiter=delimiter)
-            rows = list(reader)
-    except Exception as exc:
-        LOGGER.warning("Failed to read glossary file: %s", exc)
-        return []
-    if not rows:
-        return []
-    header = [cell.strip().lower() for cell in rows[0]]
-    has_header = {"source", "target", "source_lang", "target_lang"}.issubset(
-        set(header)
-    )
-    start_idx = 1 if has_header else 0
-    for row in rows[start_idx:]:
-        if len(row) < 4:
-            continue
-        src_lang = row[0].strip()
-        tgt_lang = row[1].strip()
-        src_text = row[2].strip()
-        tgt_text = row[3].strip()
-        if not src_text or not tgt_text:
-            continue
-        if src_lang.lower() != source_lang.lower():
-            continue
-        if tgt_lang.lower() != target_lang.lower():
-            continue
-        pairs.append((src_text, tgt_text))
-        if len(pairs) >= max_pairs:
-            break
-    return pairs
-
-
-def build_glossary_pairs_context(pairs: list[tuple[str, str]]) -> str:
-    if not pairs:
-        return ""
-    lines = [f"{src} => {tgt}" for src, tgt in pairs]
-    return "Glossary (use exact mappings):\n" + "\n".join(lines)
-
-
-def combine_glossary_context(pairs_ctx: str, terms_ctx: str) -> str:
-    if pairs_ctx and terms_ctx:
-        return f"{pairs_ctx}\n\n{terms_ctx}"
-    return pairs_ctx or terms_ctx
 
 
 def build_context_text(title: str, glossary: str) -> str:
@@ -639,20 +389,6 @@ def effective_max_tokens(text: str, max_tokens: int, source_lang: str, target_la
     return max(64, min(max_tokens, scaled))
 
 
-def estimate_output_tokens(text: str, source_lang: str, target_lang: str) -> int:
-    lang_src = source_lang.lower()
-    lang_tgt = target_lang.lower()
-    ratio = 1.3
-    if lang_src.startswith("zh") and lang_tgt.startswith("en"):
-        ratio = 1.4
-    elif lang_src.startswith("en") and lang_tgt.startswith(("zh", "ja", "ko")):
-        ratio = 1.1
-    elif lang_src.startswith(("zh", "ja", "ko")):
-        ratio = 1.3
-    estimated = estimate_tokens(strip_placeholders(text))
-    return int(estimated * ratio) + 32
-
-
 def infer_max_tokens_from_chars(max_chars: int, source_lang: str, target_lang: str) -> int:
     if max_chars <= 0:
         return DEFAULT_MAX_TOKENS
@@ -668,47 +404,6 @@ def infer_max_tokens_from_chars(max_chars: int, source_lang: str, target_lang: s
     estimated = max_chars // 4
     inferred = int(estimated * ratio) + 64
     return max(128, inferred)
-
-
-def estimate_chars_per_token(sample: str, source_lang: str) -> float:
-    if not sample:
-        return 1.2 if source_lang.lower().startswith("zh") else 4.0
-    tokens = estimate_tokens(sample)
-    if tokens <= 0:
-        return 1.2 if source_lang.lower().startswith("zh") else 4.0
-    ratio = len(sample) / tokens
-    default_ratio = 1.2 if source_lang.lower().startswith("zh") else 4.0
-    return max(0.5, min(ratio, default_ratio))
-
-
-def estimate_prompt_overhead_tokens(
-    source_lang: str, target_lang: str, context: str
-) -> int:
-    prompt = build_gemma_prompt("", source_lang, target_lang, context)
-    return estimate_tokens(prompt)
-
-
-def infer_auto_limits(
-    content: str,
-    source_lang: str,
-    target_lang: str,
-    max_context_tokens: int,
-    max_tokens_hint: int,
-    glossary_context: str,
-) -> tuple[int, int, int, float]:
-    overhead = estimate_prompt_overhead_tokens(
-        source_lang, target_lang, glossary_context
-    )
-    safety_tokens = 64
-    output_tokens = min(max_tokens_hint, max_context_tokens - overhead - safety_tokens)
-    output_tokens = max(64, output_tokens)
-    input_budget = max_context_tokens - overhead - output_tokens - safety_tokens
-    if input_budget < 64:
-        input_budget = 64
-    sample = content[:2000]
-    ratio = estimate_chars_per_token(sample, source_lang)
-    max_chars = max(256, int(input_budget * ratio))
-    return max_chars, output_tokens, overhead, ratio
 
 
 def translate_segment(
@@ -778,11 +473,7 @@ def translate_segment_with_meta(
     }
     response = post_request(completion_url, payload, api_key)
     elapsed = time.monotonic() - started
-    tag = current_log_context()
-    if tag:
-        LOGGER.info("Segment translated [%s]: %.2fs, %d chars", tag, elapsed, len(text))
-    else:
-        LOGGER.info("Segment translated: %.2fs, %d chars", elapsed, len(text))
+    LOGGER.info("Segment translated: %.2fs, %d chars", elapsed, len(text))
     translated = response["choices"][0]["text"]
     finish_reason = response["choices"][0].get("finish_reason")
     cache_set(cache, cache_lock, key, translated)
@@ -928,23 +619,11 @@ def estimate_tokens(text: str) -> int:
 
 
 def max_group_tokens(max_tokens: int) -> int:
-    return max(64, int(max_tokens * 0.8))
+    return max(64, int(max_tokens * 0.6))
 
 
 def min_group_tokens(max_tokens: int) -> int:
     return max(32, int(max_group_tokens(max_tokens) * 0.2))
-
-
-TABLE_OUTPUT_RATIO = 0.6
-ROW_OUTPUT_RATIO = 0.7
-
-
-def table_output_limit(max_tokens: int) -> int:
-    return max(64, int(max_tokens * TABLE_OUTPUT_RATIO))
-
-
-def row_output_limit(max_tokens: int) -> int:
-    return max(64, int(max_tokens * ROW_OUTPUT_RATIO))
 
 
 def estimate_row_tokens(text: str) -> int:
@@ -1177,57 +856,6 @@ def translate_html_fragment(
     matches = list(row_pattern.finditer(fragment))
     if matches:
         rows = [match.group(1) for match in matches]
-        if table_batch_mode == "table":
-            input_tokens = estimate_tokens(fragment)
-            output_tokens = estimate_output_tokens(
-                fragment, source_lang, target_lang
-            )
-            if input_tokens > input_token_limit(max_tokens, base_context):
-                LOGGER.info(
-                    "HTML table skip: token_exceed tokens=%d limit=%d rows=%d",
-                    input_tokens,
-                    input_token_limit(max_tokens, base_context),
-                    len(rows),
-                )
-            elif output_tokens > table_output_limit(max_tokens):
-                LOGGER.info(
-                    "HTML table skip: output_risk output=%d limit=%d rows=%d",
-                    output_tokens,
-                    table_output_limit(max_tokens),
-                    len(rows),
-                )
-            elif input_tokens <= max_group_tokens(max_tokens):
-                try:
-                    translated, truncated, unresolved = translate_text_fragment_with_meta(
-                        fragment,
-                        source_lang,
-                        target_lang,
-                        model,
-                        url,
-                        api_key,
-                        cache,
-                        cache_lock,
-                        persistent_cache,
-                        base_context,
-                        max_tokens,
-                    )
-                except RuntimeError as exc:
-                    if not is_context_length_error(exc):
-                        raise
-                    translated = None
-                    truncated = True
-                    unresolved = True
-                if translated is not None and not truncated and not unresolved:
-                    cleaned = strip_context_leak(translated)
-                    if not contains_prompt_leak(cleaned):
-                        tr_open = len(
-                            re.findall(r"<tr\\b", cleaned, flags=re.IGNORECASE)
-                        )
-                        tr_close = len(
-                            re.findall(r"</tr>", cleaned, flags=re.IGNORECASE)
-                        )
-                        if tr_open >= len(rows) and tr_close >= len(rows):
-                            return cleaned
         patterns = [
             re.compile(r"`+[^`]*?`+"),
             re.compile(r"\$\$[\s\S]*?\$\$"),
@@ -1268,65 +896,128 @@ def translate_html_fragment(
             if not node_refs:
                 return row_items
 
-            tiny_nodes = sum(1 for _row_idx, _part_idx, protected, _raw in node_refs if estimate_tokens(protected) <= 4)
-            if tiny_nodes:
-                LOGGER.info(
-                    "HTML table tiny nodes: %d of %d (<=4 tokens)",
-                    tiny_nodes,
-                    len(node_refs),
-                )
-
             if table_batch_mode == "cell":
                 return None
 
             def translate_node_batch(
                 nodes: list[tuple[int, int, str, str]]
             ) -> list[str] | None:
-                parts: list[str] = []
-                for idx, (_row_idx, _part_idx, protected, _raw) in enumerate(nodes):
-                    parts.append(f'<span data-idx="{idx}">{protected}</span>')
-                wrapped = "<div>" + "".join(parts) + "</div>"
-                translated, finish_reason = translate_segment_with_meta(
-                    wrapped,
-                    source_lang,
-                    target_lang,
-                    model,
-                    url,
-                    api_key,
-                    cache,
-                    cache_lock,
-                    persistent_cache,
-                    context,
-                    max_tokens,
+                last_reason: str | None = None
+                base_placeholders = placeholders
+                span_payload = "".join(
+                    f'<span data-ph="{idx}">{node}</span>'
+                    for idx, (_r, _p, node, _raw) in enumerate(nodes)
                 )
-                if finish_reason == "length":
-                    return None
-                translated = strip_context_leak(translated)
-                spans = re.findall(
-                    r'<span\\s+data-idx="(\\d+)">(.*?)</span>',
-                    translated,
-                    flags=re.DOTALL | re.IGNORECASE,
-                )
-                if len(spans) != len(nodes):
-                    return None
-                result_map: dict[int, str] = {}
-                for idx_text, content in spans:
+                try:
+                    translated, finish_reason = translate_segment_with_meta(
+                        span_payload,
+                        source_lang,
+                        target_lang,
+                        model,
+                        url,
+                        api_key,
+                        cache,
+                        cache_lock,
+                        persistent_cache,
+                        context,
+                        max_tokens,
+                    )
+                except RuntimeError as exc:
+                    if is_context_length_error(exc):
+                        last_reason = "context_length"
+                        translated = None
+                        finish_reason = None
+                    else:
+                        raise
+                if translated is not None and finish_reason != "length":
+                    span_pattern = re.compile(
+                        r"<span[^>]*\bdata-ph\s*=\s*['\"]?(\d+)['\"]?[^>]*>(.*?)</span>",
+                        re.IGNORECASE | re.DOTALL,
+                    )
+                    matches = span_pattern.findall(translated)
+                    if matches:
+                        span_map = {int(idx): text for idx, text in matches}
+                        if len(span_map) == len(nodes):
+                            parts_out: list[str] = []
+                            invalid = False
+                            for idx in range(len(nodes)):
+                                part = span_map.get(idx, "")
+                                restored = restore_placeholders(
+                                    part, base_placeholders
+                                )
+                                if "__PH" in restored:
+                                    invalid = True
+                                    last_reason = "unresolved_ph_span"
+                                    break
+                                parts_out.append(strip_context_leak(restored))
+                            if not invalid:
+                                return parts_out
+                        else:
+                            last_reason = "span_count_mismatch"
+                    else:
+                        last_reason = "span_missing"
+                for sep_value in iter_sep_values():
+                    sep_token = f"{PLACEHOLDER_PREFIX}{counter}__"
+                    local_placeholders = dict(placeholders)
+                    local_placeholders[sep_token] = sep_value
+                    combined = sep_token.join(node for _r, _p, node, _raw in nodes)
                     try:
-                        idx_int = int(idx_text)
-                    except ValueError:
-                        return None
-                    result_map[idx_int] = content
-                results: list[str] = []
-                for idx in range(len(nodes)):
-                    if idx not in result_map:
-                        return None
-                    restored = restore_placeholders(result_map[idx], placeholders)
+                        translated, finish_reason = translate_segment_with_meta(
+                            combined,
+                            source_lang,
+                            target_lang,
+                            model,
+                            url,
+                            api_key,
+                            cache,
+                            cache_lock,
+                            persistent_cache,
+                            context,
+                            max_tokens,
+                        )
+                    except RuntimeError as exc:
+                        if is_context_length_error(exc):
+                            last_reason = "context_length"
+                            continue
+                        raise
+                    if finish_reason == "length":
+                        last_reason = "finish_length"
+                        continue
+                    if sep_token in translated:
+                        raw_parts = translated.split(sep_token)
+                        if len(raw_parts) == len(nodes):
+                            parts_out: list[str] = []
+                            invalid = False
+                            for part in raw_parts:
+                                restored = restore_placeholders(
+                                    part, local_placeholders
+                                )
+                                if "__PH" in restored:
+                                    invalid = True
+                                    break
+                                parts_out.append(strip_context_leak(restored))
+                            if not invalid:
+                                return parts_out
+                            last_reason = "unresolved_ph_sep_token"
+                        else:
+                            last_reason = "sep_token_mismatch"
+                    restored = restore_placeholders(translated, local_placeholders)
                     if "__PH" in restored:
-                        return None
-                    if contains_prompt_leak(restored):
-                        return None
-                    results.append(strip_context_leak(restored))
-                return results
+                        last_reason = "unresolved_ph"
+                        continue
+                    parts_out = restored.split(sep_value)
+                    if len(parts_out) != len(nodes):
+                        last_reason = "sep_value_mismatch"
+                        continue
+                    return [strip_context_leak(item) for item in parts_out]
+                if len(nodes) > 1:
+                    LOGGER.info(
+                        "HTML table batch failed: mode=%s nodes=%d reason=%s",
+                        table_batch_mode,
+                        len(nodes),
+                        last_reason or "unknown",
+                    )
+                return None
 
             def translate_nodes_recursive(
                 nodes: list[tuple[int, int, str, str]],
@@ -1369,20 +1060,19 @@ def translate_html_fragment(
                         if len(batch_nodes) == 1:
                             _row_idx, _part_idx, protected, raw = batch_nodes[0]
                             try:
-                                with log_context("html_table:cell"):
-                                    translated, finish_reason = translate_segment_with_meta(
-                                        protected,
-                                        source_lang,
-                                        target_lang,
-                                        model,
-                                        url,
-                                        api_key,
-                                        cache,
-                                        cache_lock,
-                                        persistent_cache,
-                                        context,
-                                        max_tokens,
-                                    )
+                                translated, finish_reason = translate_segment_with_meta(
+                                    protected,
+                                    source_lang,
+                                    target_lang,
+                                    model,
+                                    url,
+                                    api_key,
+                                    cache,
+                                    cache_lock,
+                                    persistent_cache,
+                                    context,
+                                    max_tokens,
+                                )
                             except RuntimeError as exc:
                                 if is_context_length_error(exc):
                                     results.append(raw)
@@ -1393,9 +1083,6 @@ def translate_html_fragment(
                                 continue
                             restored = restore_placeholders(translated, placeholders)
                             if "__PH" in restored:
-                                results.append(raw)
-                                continue
-                            if contains_prompt_leak(restored):
                                 results.append(raw)
                                 continue
                             results.append(strip_context_leak(restored))
@@ -1420,27 +1107,17 @@ def translate_html_fragment(
                 row_parts[row_idx][part_idx] = text
             return ["".join(parts) for parts in row_parts]
 
-        def split_rows_by_tokens(
-            row_items: list[str], token_sizes: list[int], context: str
-        ) -> tuple[list[str], list[int], list[str], list[int]]:
-            limit = input_token_limit(max_tokens, context)
+        def split_rows_by_tokens(row_items: list[str], token_sizes: list[int]) -> tuple[list[str], list[int], list[str], list[int]]:
+            total = sum(token_sizes)
+            target = total / 2
             cumulative = 0
             split_idx = 0
             for idx, size in enumerate(token_sizes):
-                if split_idx > 0 and cumulative + size > limit:
-                    break
                 cumulative += size
                 split_idx = idx + 1
-                if cumulative >= limit:
+                if cumulative >= target:
                     break
             split_idx = max(1, min(split_idx, len(row_items) - 1))
-            LOGGER.info(
-                "HTML table split rows by limit: left=%d right=%d tokens_left=%d limit=%d",
-                split_idx,
-                len(row_items) - split_idx,
-                sum(token_sizes[:split_idx]),
-                limit,
-            )
             return (
                 row_items[:split_idx],
                 token_sizes[:split_idx],
@@ -1448,37 +1125,13 @@ def translate_html_fragment(
                 token_sizes[split_idx:],
             )
 
-        def translate_row_group_raw(rows: list[str], context: str) -> list[str] | None:
-            combined = "".join(rows)
-            combined_tokens = estimate_tokens(combined)
-            if combined_tokens > input_token_limit(max_tokens, context):
-                LOGGER.info(
-                    "HTML table row_raw fail: token_exceed tokens=%d limit=%d rows=%d",
-                    combined_tokens,
-                    input_token_limit(max_tokens, context),
-                    len(rows),
-                )
-                return None
-            output_tokens = estimate_output_tokens(
-                combined, source_lang, target_lang
-            )
-            if output_tokens > row_output_limit(max_tokens):
-                LOGGER.info(
-                    "HTML table row_raw fail: output_risk output=%d limit=%d rows=%d",
-                    output_tokens,
-                    row_output_limit(max_tokens),
-                    len(rows),
-                )
-                return None
-            if output_tokens > max_tokens:
-                LOGGER.info(
-                    "HTML table row_raw fail: output_exceed output=%d max_tokens=%d rows=%d",
-                    output_tokens,
-                    max_tokens,
-                    len(rows),
-                )
-                return None
-            with log_context("html_table:row_raw"):
+        def translate_rows_recursive(
+            row_items: list[str], token_sizes: list[int], context: str
+        ) -> list[str]:
+            def translate_row_group_raw(rows: list[str]) -> list[str] | None:
+                combined = "".join(rows)
+                if estimate_tokens(combined) > max_group_tokens(max_tokens):
+                    return None
                 translated, finish_reason = translate_segment_with_meta(
                     combined,
                     source_lang,
@@ -1492,76 +1145,52 @@ def translate_html_fragment(
                     context,
                     max_tokens,
                 )
-            if finish_reason == "length":
-                LOGGER.info(
-                    "HTML table row_raw fail: finish_reason=length rows=%d tokens=%d",
-                    len(rows),
-                    combined_tokens,
-                )
-                return None
-            translated = strip_context_leak(translated)
-            if "__PH" in translated:
-                LOGGER.info(
-                    "HTML table row_raw fail: unresolved_ph rows=%d tokens=%d",
-                    len(rows),
-                    combined_tokens,
-                )
-                return None
-            if contains_prompt_leak(translated):
-                LOGGER.info(
-                    "HTML table row_raw fail: prompt_leak rows=%d tokens=%d",
-                    len(rows),
-                    combined_tokens,
-                )
-                return None
-            matches = list(row_pattern.finditer(translated))
-            if not matches:
-                if len(rows) == 1 and re.search(r"</?(td|th)\\b", translated, re.IGNORECASE):
-                    return [f"<tr>{translated}</tr>"]
-                LOGGER.info(
-                    "HTML table row_raw fail: no_rows rows=%d tokens=%d",
-                    len(rows),
-                    combined_tokens,
-                )
-                return None
-            if len(matches) < len(rows):
-                LOGGER.info(
-                    "HTML table row_raw fail: row_count_mismatch expected=%d got=%d",
-                    len(rows),
-                    len(matches),
-                )
-                return None
-            if len(matches) > len(rows):
-                LOGGER.info(
-                    "HTML table row count mismatch: expected=%d got=%d, trimming extras",
-                    len(rows),
-                    len(matches),
-                )
-            return [match.group(1) for match in matches[: len(rows)]]
+                if finish_reason == "length":
+                    return None
+                translated = strip_context_leak(translated)
+                if "__PH" in translated:
+                    return None
+                matches = list(row_pattern.finditer(translated))
+                if len(matches) != len(rows):
+                    return None
+                return [match.group(1) for match in matches]
 
-        def translate_rows_recursive(
-            row_items: list[str], token_sizes: list[int], context: str
-        ) -> list[str]:
-            group_tokens = sum(token_sizes)
-            if len(row_items) <= 2 and group_tokens < DEFAULT_ROW_RAW_MIN_TOKENS:
-                LOGGER.info(
-                    "HTML table skip row_raw: small_group rows=%d tokens=%d",
-                    len(row_items),
-                    group_tokens,
-                )
-                if table_batch_mode != "cell":
+            if table_batch_mode == "table":
+                group_result = translate_row_group(row_items, context)
+                if group_result is not None:
+                    return group_result
+            if table_batch_mode == "row":
+                raw_group = translate_row_group_raw(row_items)
+                if raw_group is not None:
+                    return raw_group
+                if len(row_items) == 1:
                     group_result = translate_row_group(row_items, context)
                     if group_result is not None:
                         return group_result
-            else:
-                if table_batch_mode != "cell":
-                    raw_group = translate_row_group_raw(row_items, context)
-                    if raw_group is not None:
-                        return raw_group
-                    group_result = translate_row_group(row_items, context)
-                    if group_result is not None:
-                        return group_result
-
+                else:
+                    max_tokens_group = max_group_tokens(max_tokens)
+                    min_tokens_group = min_group_tokens(max_tokens)
+                    row_indices = list(range(len(row_items)))
+                    row_groups = build_token_groups(
+                        row_indices,
+                        token_sizes,
+                        max_tokens_group,
+                        min_tokens_group,
+                    )
+                    translated: list[str] = []
+                    for group in row_groups:
+                        group_rows = [row_items[i] for i in group]
+                        group_result = translate_row_group_raw(group_rows)
+                        if group_result is not None:
+                            translated.extend(group_result)
+                            continue
+                        for row in group_rows:
+                            translated.extend(
+                                translate_rows_recursive(
+                                    [row], [estimate_row_tokens(row)], context
+                                )
+                            )
+                    return translated
             if len(row_items) == 1:
                 row = row_items[0]
                 parts = re.split(r"(<[^>]+>)", row)
@@ -1573,87 +1202,46 @@ def translate_html_fragment(
                     if not part.strip():
                         out_parts.append(part)
                         continue
-                    LOGGER.info(
-                        "HTML table fallback: row->cell_text rows=%d tokens=%d",
-                        len(row_items),
-                        token_sizes[0] if token_sizes else 0,
-                    )
-                    with log_context("html_table:cell_text"):
-                        out_parts.append(
-                            translate_text_fragment(
-                                part,
-                                source_lang,
-                                target_lang,
-                                model,
-                                url,
-                                api_key,
-                                cache,
-                                cache_lock,
-                                persistent_cache,
-                                context,
-                                max_tokens,
-                            )
+                    out_parts.append(
+                        translate_text_fragment(
+                            part,
+                            source_lang,
+                            target_lang,
+                            model,
+                            url,
+                            api_key,
+                            cache,
+                            cache_lock,
+                            persistent_cache,
+                            context,
+                            max_tokens,
                         )
+                    )
                 return ["".join(out_parts)]
-            LOGGER.info(
-                "HTML table fallback: rows->split rows=%d tokens=%d",
-                len(row_items),
-                sum(token_sizes),
-            )
-            left_rows, left_tokens, right_rows, right_tokens = split_rows_by_tokens(
-                row_items, token_sizes, context
-            )
-            return translate_rows_recursive(
-                left_rows, left_tokens, context
-            ) + translate_rows_recursive(right_rows, right_tokens, context)
+            if table_batch_mode == "row":
+                left_rows, left_tokens, right_rows, right_tokens = split_rows_by_tokens(
+                    row_items, token_sizes
+                )
+                return translate_rows_recursive(
+                    left_rows, left_tokens, context
+                ) + translate_rows_recursive(right_rows, right_tokens, context)
+            translated: list[str] = []
+            for row in row_items:
+                translated.extend(
+                    translate_rows_recursive([row], [estimate_row_tokens(row)], context)
+                )
+            return translated
 
-        row_tokens = [
-            max(estimate_row_tokens(row), estimate_tokens(row)) for row in rows
-        ]
-        tiny_rows = sum(1 for size in row_tokens if size <= 8)
-        if tiny_rows:
-            LOGGER.info(
-                "HTML table tiny rows: %d of %d (<=8 tokens)",
-                tiny_rows,
-                len(rows),
-            )
+        row_tokens = [estimate_row_tokens(row) for row in rows]
         max_tokens_group = max_group_tokens(max_tokens)
         min_tokens_group = min_group_tokens(max_tokens)
-
-        def chunk_rows_by_limit() -> list[list[int]]:
-            chunks: list[list[int]] = []
-            current: list[int] = []
-            current_tokens = 0
-            limit = input_token_limit(max_tokens, base_context)
-            for idx, size in enumerate(row_tokens):
-                if current and current_tokens + size > limit:
-                    chunks.append(current)
-                    current = []
-                    current_tokens = 0
-                current.append(idx)
-                current_tokens += size
-                if current_tokens >= limit:
-                    chunks.append(current)
-                    current = []
-                    current_tokens = 0
-            if current:
-                chunks.append(current)
-            return chunks
-
         groups = build_token_groups(
             list(range(len(rows))),
             row_tokens,
             max_tokens_group,
             min_tokens_group,
         )
-        if table_batch_mode == "table":
-            groups = chunk_rows_by_limit()
-            LOGGER.info(
-                "HTML table chunked groups: %d (limit=%d)",
-                len(groups),
-                input_token_limit(max_tokens, base_context),
-            )
-        elif len(groups) > 1:
+        if len(groups) > 1:
             LOGGER.info(
                 "HTML table row groups: %d (min_tokens=%d max_tokens=%d)",
                 len(groups),
@@ -1723,6 +1311,9 @@ def translate_html_fragment(
             if current:
                 subgroups.append(current)
             return subgroups
+
+        if table_batch_mode == "table":
+            groups = [list(range(len(rows)))]
 
         for group in groups:
             for sub in iter_untranslated_subgroups(group):
@@ -1992,60 +1583,128 @@ def translate_markdown_table_fragment(
                 protected_nodes.append(
                     (row_idx, target_cell_idx, leading, trailing, protected, raw)
                 )
-            tiny_nodes = sum(1 for node in protected_nodes if estimate_tokens(node[4]) <= 4)
-            if tiny_nodes:
-                LOGGER.info(
-                    "Markdown table tiny nodes: %d of %d (<=4 tokens)",
-                    tiny_nodes,
-                    len(protected_nodes),
-                )
 
             def translate_node_batch(
                 batch_nodes: list[tuple[int, int, str, str, str, str]]
             ) -> list[str] | None:
-                parts: list[str] = []
-                for idx, (_row_idx, _cell_idx, _leading, _trailing, protected, _raw) in enumerate(batch_nodes):
-                    parts.append(f'<span data-idx="{idx}">{protected}</span>')
-                wrapped = "<div>" + "".join(parts) + "</div>"
-                translated, finish_reason = translate_segment_with_meta(
-                    wrapped,
-                    source_lang,
-                    target_lang,
-                    model,
-                    url,
-                    api_key,
-                    cache,
-                    cache_lock,
-                    persistent_cache,
-                    context,
-                    max_tokens,
+                last_reason: str | None = None
+                base_placeholders = placeholders
+                span_payload = "".join(
+                    f'<span data-ph="{idx}">{node}</span>'
+                    for idx, (_r, _c, _l, _t, node, _raw) in enumerate(batch_nodes)
                 )
-                if finish_reason == "length":
-                    return None
-                translated = strip_context_leak(translated)
-                spans = re.findall(
-                    r'<span\\s+data-idx="(\\d+)">(.*?)</span>',
-                    translated,
-                    flags=re.DOTALL | re.IGNORECASE,
-                )
-                if len(spans) != len(batch_nodes):
-                    return None
-                result_map: dict[int, str] = {}
-                for idx_text, content in spans:
+                try:
+                    translated, finish_reason = translate_segment_with_meta(
+                        span_payload,
+                        source_lang,
+                        target_lang,
+                        model,
+                        url,
+                        api_key,
+                        cache,
+                        cache_lock,
+                        persistent_cache,
+                        context,
+                        max_tokens,
+                    )
+                except RuntimeError as exc:
+                    if is_context_length_error(exc):
+                        last_reason = "context_length"
+                        translated = None
+                        finish_reason = None
+                    else:
+                        raise
+                if translated is not None and finish_reason != "length":
+                    span_pattern = re.compile(
+                        r"<span[^>]*\bdata-ph\s*=\s*['\"]?(\d+)['\"]?[^>]*>(.*?)</span>",
+                        re.IGNORECASE | re.DOTALL,
+                    )
+                    matches = span_pattern.findall(translated)
+                    if matches:
+                        span_map = {int(idx): text for idx, text in matches}
+                        if len(span_map) == len(batch_nodes):
+                            parts_out: list[str] = []
+                            invalid = False
+                            for idx in range(len(batch_nodes)):
+                                part = span_map.get(idx, "")
+                                restored = restore_placeholders(
+                                    part, base_placeholders
+                                )
+                                if "__PH" in restored:
+                                    invalid = True
+                                    last_reason = "unresolved_ph_span"
+                                    break
+                                parts_out.append(strip_context_leak(restored))
+                            if not invalid:
+                                return parts_out
+                        else:
+                            last_reason = "span_count_mismatch"
+                    else:
+                        last_reason = "span_missing"
+                for sep_value in iter_sep_values():
+                    sep_token = f"{PLACEHOLDER_PREFIX}{counter}__"
+                    local_placeholders = dict(placeholders)
+                    local_placeholders[sep_token] = sep_value
+                    combined = sep_token.join(
+                        node for _r, _c, _l, _t, node, _raw in batch_nodes
+                    )
                     try:
-                        idx_int = int(idx_text)
-                    except ValueError:
-                        return None
-                    result_map[idx_int] = content
-                results: list[str] = []
-                for idx in range(len(batch_nodes)):
-                    if idx not in result_map:
-                        return None
-                    restored = restore_placeholders(result_map[idx], placeholders)
+                        translated, finish_reason = translate_segment_with_meta(
+                            combined,
+                            source_lang,
+                            target_lang,
+                            model,
+                            url,
+                            api_key,
+                            cache,
+                            cache_lock,
+                            persistent_cache,
+                            context,
+                            max_tokens,
+                        )
+                    except RuntimeError as exc:
+                        if is_context_length_error(exc):
+                            last_reason = "context_length"
+                            continue
+                        raise
+                    if finish_reason == "length":
+                        last_reason = "finish_length"
+                        continue
+                    if sep_token in translated:
+                        raw_parts = translated.split(sep_token)
+                        if len(raw_parts) == len(batch_nodes):
+                            parts_out: list[str] = []
+                            invalid = False
+                            for part in raw_parts:
+                                restored = restore_placeholders(
+                                    part, local_placeholders
+                                )
+                                if "__PH" in restored:
+                                    invalid = True
+                                    break
+                                parts_out.append(strip_context_leak(restored))
+                            if not invalid:
+                                return parts_out
+                            last_reason = "unresolved_ph_sep_token"
+                        else:
+                            last_reason = "sep_token_mismatch"
+                    restored = restore_placeholders(translated, local_placeholders)
                     if "__PH" in restored:
-                        return None
-                    results.append(strip_context_leak(restored))
-                return results
+                        last_reason = "unresolved_ph"
+                        continue
+                    parts_out = restored.split(sep_value)
+                    if len(parts_out) != len(batch_nodes):
+                        last_reason = "sep_value_mismatch"
+                        continue
+                    return [strip_context_leak(item) for item in parts_out]
+                if len(batch_nodes) > 1:
+                    LOGGER.info(
+                        "Markdown table batch failed: mode=%s nodes=%d reason=%s",
+                        table_batch_mode,
+                        len(batch_nodes),
+                        last_reason or "unknown",
+                    )
+                return None
 
             def translate_nodes_recursive(
                 batch_nodes: list[tuple[int, int, str, str, str, str]],
@@ -2057,20 +1716,19 @@ def translate_markdown_table_fragment(
                 if len(batch_nodes) == 1:
                     row_idx, target_cell_idx, leading, trailing, protected, raw = batch_nodes[0]
                     try:
-                        with log_context("md_table:cell"):
-                            translated, finish_reason = translate_segment_with_meta(
-                                protected,
-                                source_lang,
-                                target_lang,
-                                model,
-                                url,
-                                api_key,
-                                cache,
-                                cache_lock,
-                                persistent_cache,
-                                context,
-                                max_tokens,
-                            )
+                        translated, finish_reason = translate_segment_with_meta(
+                            protected,
+                            source_lang,
+                            target_lang,
+                            model,
+                            url,
+                            api_key,
+                            cache,
+                            cache_lock,
+                            persistent_cache,
+                            context,
+                            max_tokens,
+                        )
                     except RuntimeError as exc:
                         if is_context_length_error(exc):
                             return [raw]
@@ -2079,8 +1737,6 @@ def translate_markdown_table_fragment(
                         return [raw]
                     restored = restore_placeholders(translated, placeholders)
                     if "__PH" in restored:
-                        return [raw]
-                    if contains_prompt_leak(restored):
                         return [raw]
                     return [strip_context_leak(restored)]
                 mid = len(batch_nodes) // 2
@@ -2139,27 +1795,17 @@ def translate_markdown_table_fragment(
 
         return ["|".join(cells) for cells in row_cells]
 
-    def split_rows_by_tokens(
-        row_items: list[str], token_sizes: list[int], context: str
-    ) -> tuple[list[str], list[int], list[str], list[int]]:
-        limit = input_token_limit(max_tokens, context)
+    def split_rows_by_tokens(row_items: list[str], token_sizes: list[int]) -> tuple[list[str], list[int], list[str], list[int]]:
+        total = sum(token_sizes)
+        target = total / 2
         cumulative = 0
         split_idx = 0
         for idx, size in enumerate(token_sizes):
-            if split_idx > 0 and cumulative + size > limit:
-                break
             cumulative += size
             split_idx = idx + 1
-            if cumulative >= limit:
+            if cumulative >= target:
                 break
         split_idx = max(1, min(split_idx, len(row_items) - 1))
-        LOGGER.info(
-            "Markdown table split rows by limit: left=%d right=%d tokens_left=%d limit=%d",
-            split_idx,
-            len(row_items) - split_idx,
-            sum(token_sizes[:split_idx]),
-            limit,
-        )
         return (
             row_items[:split_idx],
             token_sizes[:split_idx],
@@ -2170,94 +1816,7 @@ def translate_markdown_table_fragment(
     def translate_rows_recursive(
         row_items: list[str], token_sizes: list[int], context: str
     ) -> list[str]:
-        def translate_row_group_raw(rows: list[str], context: str) -> list[str] | None:
-            combined = "".join(rows)
-            combined_tokens = estimate_tokens(combined)
-            if combined_tokens > input_token_limit(max_tokens, context):
-                LOGGER.info(
-                    "Markdown table row_raw fail: token_exceed tokens=%d limit=%d rows=%d",
-                    combined_tokens,
-                    input_token_limit(max_tokens, context),
-                    len(rows),
-                )
-                return None
-            output_tokens = estimate_output_tokens(
-                combined, source_lang, target_lang
-            )
-            if output_tokens > row_output_limit(max_tokens):
-                LOGGER.info(
-                    "Markdown table row_raw fail: output_risk output=%d limit=%d rows=%d",
-                    output_tokens,
-                    row_output_limit(max_tokens),
-                    len(rows),
-                )
-                return None
-            if output_tokens > max_tokens:
-                LOGGER.info(
-                    "Markdown table row_raw fail: output_exceed output=%d max_tokens=%d rows=%d",
-                    output_tokens,
-                    max_tokens,
-                    len(rows),
-                )
-                return None
-            with log_context("md_table:row_raw"):
-                translated, truncated, unresolved = translate_text_fragment_with_meta(
-                    combined,
-                    source_lang,
-                    target_lang,
-                    model,
-                    url,
-                    api_key,
-                    cache,
-                    cache_lock,
-                    persistent_cache,
-                    context,
-                    max_tokens,
-                )
-            if truncated or unresolved:
-                LOGGER.info(
-                    "Markdown table row_raw fail: truncated=%s unresolved=%s rows=%d tokens=%d",
-                    truncated,
-                    unresolved,
-                    len(rows),
-                    combined_tokens,
-                )
-                return None
-            translated = strip_context_leak(translated)
-            if contains_prompt_leak(translated):
-                LOGGER.info(
-                    "Markdown table row_raw fail: prompt_leak rows=%d tokens=%d",
-                    len(rows),
-                    combined_tokens,
-                )
-                return None
-            lines = translated.splitlines(keepends=True)
-            if not lines:
-                LOGGER.info(
-                    "Markdown table row_raw fail: no_rows rows=%d tokens=%d",
-                    len(rows),
-                    combined_tokens,
-                )
-                return None
-            if len(lines) < len(rows):
-                LOGGER.info(
-                    "Markdown table row_raw fail: row_count_mismatch expected=%d got=%d",
-                    len(rows),
-                    len(lines),
-                )
-                return None
-            if len(lines) > len(rows):
-                LOGGER.info(
-                    "Markdown table row count mismatch: expected=%d got=%d, trimming extras",
-                    len(rows),
-                    len(lines),
-                )
-            return lines[: len(rows)]
-
-        if table_batch_mode != "cell":
-            raw_group = translate_row_group_raw(row_items, context)
-            if raw_group is not None:
-                return raw_group
+        if table_batch_mode in {"table", "row"}:
             group_result = translate_row_group(row_items, context)
             if group_result is not None:
                 return group_result
@@ -2273,89 +1832,48 @@ def translate_markdown_table_fragment(
                 inner = cell[len(leading) : len(cell) - len(trailing)]
                 if not inner:
                     continue
-                LOGGER.info(
-                    "Markdown table fallback: row->cell_text rows=%d tokens=%d",
-                    len(row_items),
-                    token_sizes[0] if token_sizes else 0,
-                )
-                with log_context("md_table:cell_text"):
-                    cells[cell_idx] = (
-                        leading
-                        + translate_text_fragment(
-                            inner,
-                            source_lang,
-                            target_lang,
-                            model,
-                            url,
-                            api_key,
-                            cache,
-                            cache_lock,
-                            persistent_cache,
-                            context,
-                            max_tokens,
-                        )
-                        + trailing
+                cells[cell_idx] = (
+                    leading
+                    + translate_text_fragment(
+                        inner,
+                        source_lang,
+                        target_lang,
+                        model,
+                        url,
+                        api_key,
+                        cache,
+                        cache_lock,
+                        persistent_cache,
+                        context,
+                        max_tokens,
                     )
+                    + trailing
+                )
             return ["|".join(cells)]
-        LOGGER.info(
-            "Markdown table fallback: rows->split rows=%d tokens=%d",
-            len(row_items),
-            sum(token_sizes),
-        )
-        left_rows, left_tokens, right_rows, right_tokens = split_rows_by_tokens(
-            row_items, token_sizes, context
-        )
-        return translate_rows_recursive(
-            left_rows, left_tokens, context
-        ) + translate_rows_recursive(right_rows, right_tokens, context)
+        if table_batch_mode == "row":
+            left_rows, left_tokens, right_rows, right_tokens = split_rows_by_tokens(
+                row_items, token_sizes
+            )
+            return translate_rows_recursive(
+                left_rows, left_tokens, context
+            ) + translate_rows_recursive(right_rows, right_tokens, context)
+        translated: list[str] = []
+        for row in row_items:
+            translated.extend(
+                translate_rows_recursive([row], [estimate_row_tokens(row)], context)
+            )
+        return translated
 
-    row_tokens = [
-        max(estimate_row_tokens(row), estimate_tokens(row)) for row in row_lines
-    ]
-    tiny_rows = sum(1 for size in row_tokens if size <= 8)
-    if tiny_rows:
-        LOGGER.info(
-            "Markdown table tiny rows: %d of %d (<=8 tokens)",
-            tiny_rows,
-            len(row_lines),
-        )
+    row_tokens = [estimate_row_tokens(row) for row in row_lines]
     max_tokens_group = max_group_tokens(max_tokens)
     min_tokens_group = min_group_tokens(max_tokens)
-
-    def chunk_rows_by_limit() -> list[list[int]]:
-        chunks: list[list[int]] = []
-        current: list[int] = []
-        current_tokens = 0
-        limit = input_token_limit(max_tokens, base_context)
-        for idx, size in enumerate(row_tokens):
-            if current and current_tokens + size > limit:
-                chunks.append(current)
-                current = []
-                current_tokens = 0
-            current.append(idx)
-            current_tokens += size
-            if current_tokens >= limit:
-                chunks.append(current)
-                current = []
-                current_tokens = 0
-        if current:
-            chunks.append(current)
-        return chunks
-
-        groups = build_token_groups(
-            list(range(len(row_lines))),
-            row_tokens,
-            max_tokens_group,
-            min_tokens_group,
-        )
-    if table_batch_mode == "table":
-        groups = chunk_rows_by_limit()
-        LOGGER.info(
-            "Markdown table chunked groups: %d (limit=%d)",
-            len(groups),
-            input_token_limit(max_tokens, base_context),
-        )
-    elif len(groups) > 1:
+    groups = build_token_groups(
+        list(range(len(row_lines))),
+        row_tokens,
+        max_tokens_group,
+        min_tokens_group,
+    )
+    if len(groups) > 1:
         LOGGER.info(
             "Markdown table row groups: %d (min_tokens=%d max_tokens=%d)",
             len(groups),
@@ -2425,6 +1943,9 @@ def translate_markdown_table_fragment(
         if current:
             subgroups.append(current)
         return subgroups
+
+    if table_batch_mode == "table":
+        groups = [list(range(len(row_lines)))]
 
     for group in groups:
         for sub in iter_untranslated_subgroups(group):
@@ -2717,85 +2238,83 @@ def translate_markdown(
     flush_list_block()
     flush_paragraph()
 
-    mergeable_kinds = {"paragraph", "line", "list_block"}
+    mergeable_kinds = {"paragraph", "html_table", "markdown_table", "list_block"}
     segments = merge_segments_by_kind(
         segments, max_chars, max_tokens, mergeable_kinds
     )
     request_count = sum(1 for kind, _, _ in segments if kind != "literal")
     total_chars = sum(len(text) for kind, text, _ in segments if kind != "literal")
     LOGGER.info("Requests sent: %d, total chars: %d", request_count, total_chars)
-    log_segment_stats(segments)
 
     def process_segment(segment: tuple[str, str, str]) -> str:
         kind, text, context = segment
-        with log_context(f"segment:{kind}"):
-            if kind == "line":
-                return translate_line(
-                    text,
-                    source_lang,
-                    target_lang,
-                    model,
-                    url,
-                    api_key,
-                    cache,
-                    cache_lock,
-                    persistent_cache,
-                    context,
-                    min_cell_tokens,
-                    max_tokens,
-                    table_batch_mode,
-                )
-            if kind == "html_table":
-                return translate_html_fragment(
-                    text,
-                    source_lang,
-                    target_lang,
-                    model,
-                    url,
-                    api_key,
-                    cache,
-                    cache_lock,
-                    persistent_cache,
-                    context,
-                    max_tokens,
-                    short_row_tokens,
-                    context_rows,
-                    min_cell_tokens,
-                    table_batch_mode,
-                )
-            if kind == "markdown_table":
-                return translate_markdown_table_fragment(
-                    text,
-                    source_lang,
-                    target_lang,
-                    model,
-                    url,
-                    api_key,
-                    cache,
-                    cache_lock,
-                    persistent_cache,
-                    context,
-                    max_tokens,
-                    short_row_tokens,
-                    context_rows,
-                    min_cell_tokens,
-                    table_batch_mode,
-                )
-            if kind in {"paragraph", "list_block"}:
-                return translate_text_fragment(
-                    text,
-                    source_lang,
-                    target_lang,
-                    model,
-                    url,
-                    api_key,
-                    cache,
-                    cache_lock,
-                    persistent_cache,
-                    context,
-                    max_tokens,
-                )
-            return text
+        if kind == "line":
+            return translate_line(
+                text,
+                source_lang,
+                target_lang,
+                model,
+                url,
+                api_key,
+                cache,
+                cache_lock,
+                persistent_cache,
+                context,
+                min_cell_tokens,
+                max_tokens,
+                table_batch_mode,
+            )
+        if kind == "html_table":
+            return translate_html_fragment(
+                text,
+                source_lang,
+                target_lang,
+                model,
+                url,
+                api_key,
+                cache,
+                cache_lock,
+                persistent_cache,
+                context,
+                max_tokens,
+                short_row_tokens,
+                context_rows,
+                min_cell_tokens,
+                table_batch_mode,
+            )
+        if kind == "markdown_table":
+            return translate_markdown_table_fragment(
+                text,
+                source_lang,
+                target_lang,
+                model,
+                url,
+                api_key,
+                cache,
+                cache_lock,
+                persistent_cache,
+                context,
+                max_tokens,
+                short_row_tokens,
+                context_rows,
+                min_cell_tokens,
+                table_batch_mode,
+            )
+        if kind in {"paragraph", "list_block"}:
+            return translate_text_fragment(
+                text,
+                source_lang,
+                target_lang,
+                model,
+                url,
+                api_key,
+                cache,
+                cache_lock,
+                persistent_cache,
+                context,
+                max_tokens,
+            )
+        return text
 
     results: list[str | None] = [None] * len(segments)
     tasks: list[tuple[int, tuple[str, str, str]]] = []
@@ -2830,50 +2349,6 @@ def translate_markdown(
             results[idx] = future.result()
 
     return "".join(part or "" for part in results)
-
-
-def log_segment_stats(segments: list[tuple[str, str, str]]) -> None:
-    short_char_threshold = 20
-    short_token_threshold = 16
-    per_kind = Counter()
-    per_kind_short_chars = Counter()
-    per_kind_short_tokens = Counter()
-    short_samples: list[tuple[int, int, str, str]] = []
-    for kind, text, _context in segments:
-        if kind == "literal":
-            continue
-        per_kind[kind] += 1
-        text_len = len(text)
-        token_len = estimate_tokens(text)
-        if text_len <= short_char_threshold:
-            per_kind_short_chars[kind] += 1
-        if token_len <= short_token_threshold:
-            per_kind_short_tokens[kind] += 1
-        if text_len <= short_char_threshold or token_len <= short_token_threshold:
-            preview = text.strip().replace("\n", "\\n")
-            if len(preview) > 60:
-                preview = preview[:60] + "..."
-            short_samples.append((text_len, token_len, kind, preview))
-    if not per_kind:
-        return
-    kind_lines = []
-    for kind in sorted(per_kind):
-        kind_lines.append(
-            f"{kind}: total={per_kind[kind]} short_chars={per_kind_short_chars[kind]} short_tokens={per_kind_short_tokens[kind]}"
-        )
-    LOGGER.info(
-        "Segment stats (short<=%d chars or <=%d tokens): %s",
-        short_char_threshold,
-        short_token_threshold,
-        "; ".join(kind_lines),
-    )
-    if short_samples:
-        short_samples.sort(key=lambda item: (item[0], item[1]))
-        sample_lines = [
-            f"{length}c/{tokens}t {kind}: {preview}"
-            for length, tokens, kind, preview in short_samples[:8]
-        ]
-        LOGGER.info("Shortest segments: %s", " | ".join(sample_lines))
 
 
 def translate_whole_file(
@@ -2956,17 +2431,8 @@ def main() -> int:
     parser.add_argument(
         "--max-chars",
         type=int,
-        help="max characters per merged paragraph chunk (0=auto)",
-    )
-    parser.add_argument(
-        "--max-tokens",
-        type=int,
-        help="max output tokens per request (default from config)",
-    )
-    parser.add_argument(
-        "--max-context-tokens",
-        type=int,
-        help="model context length in tokens (default from config)",
+        default=1200,
+        help="max characters per merged paragraph chunk (0 disables merge)",
     )
     parser.add_argument(
         "--config",
@@ -2995,41 +2461,12 @@ def main() -> int:
     parser.add_argument(
         "--table-batch-mode",
         choices=["table", "row", "cell"],
-        help="table batching mode for HTML/Markdown tables (only cell is supported)",
-    )
-    parser.add_argument(
-        "--prompt-strategy",
-        choices=["auto", "full", "minimal"],
-        help="prompt strategy for LLM (auto|full|minimal)",
-    )
-    parser.add_argument(
-        "--style-mode",
-        choices=["auto", "fixed", "off"],
-        help="translation style selection (auto|fixed|off)",
-    )
-    parser.add_argument(
-        "--style",
-        help="translation style when --style-mode=fixed "
-        "(technical|general|formal|casual|marketing|legal|academic)",
-    )
-    parser.add_argument(
-        "--style-probe-chars",
-        type=int,
-        help="number of chars for style probe sample",
+        help="table batching mode for HTML/Markdown tables (table|row|cell)",
     )
     parser.add_argument(
         "--glossary-max-terms",
         type=int,
         help="max glossary terms to include as context (0 disables)",
-    )
-    parser.add_argument(
-        "--glossary-path",
-        help="glossary file path (csv/tsv) with columns: source_lang,target_lang,source,target",
-    )
-    parser.add_argument(
-        "--glossary-max-pairs",
-        type=int,
-        help="max glossary mapping pairs to include",
     )
     parser.add_argument("--cache-path", help="persistent translation cache path")
     parser.add_argument(
@@ -3083,10 +2520,6 @@ def main() -> int:
     config_tokenizer_path = config_paths.get("tokenizer_path", "") or config_section.get(
         "tokenizer_path", ""
     )
-    config_glossary_path = (
-        config_paths.get("glossary_path", "")
-        or config_section.get("glossary_path", "")
-    )
     config_short_row_tokens = read_int(
         config_section, "short_row_tokens", DEFAULT_SHORT_ROW_TOKENS
     )
@@ -3099,28 +2532,10 @@ def main() -> int:
     config_table_batch_mode = normalize_table_batch_mode(
         config_section.get("table_batch_mode", DEFAULT_TABLE_BATCH_MODE)
     )
-    config_prompt_strategy = (
-        config_section.get("prompt_strategy", DEFAULT_PROMPT_STRATEGY) or DEFAULT_PROMPT_STRATEGY
-    )
-    config_style_mode = (
-        config_section.get("style_mode", DEFAULT_STYLE_MODE) or DEFAULT_STYLE_MODE
-    )
-    config_style_value = config_section.get("style", DEFAULT_STYLE) or DEFAULT_STYLE
-    config_style_probe_chars = read_int(
-        config_section, "style_probe_chars", DEFAULT_STYLE_PROBE_CHARS
-    )
     config_pool_max_workers = read_int(config_section, "pool_max_workers", 0)
     config_qps = read_int(config_section, "qps", 0)
     config_glossary_max_terms = read_int(
         config_section, "glossary_max_terms", DEFAULT_GLOSSARY_MAX_TERMS
-    )
-    config_glossary_max_pairs = read_int(
-        config_section, "glossary_max_pairs", DEFAULT_GLOSSARY_MAX_PAIRS
-    )
-    config_max_tokens = read_int(config_section, "max_tokens", DEFAULT_MAX_TOKENS)
-    config_max_chars = read_int(config_section, "max_chars", 0)
-    config_max_context_tokens = read_int(
-        config_section, "max_context_tokens", DEFAULT_MAX_CONTEXT_TOKENS
     )
     config_cache_enabled = read_bool(
         config_cache, "enabled", DEFAULT_CACHE_ENABLED
@@ -3137,6 +2552,7 @@ def main() -> int:
     if CUSTOM_SYSTEM_PROMPT:
         LOGGER.info("Custom system prompt enabled")
     global PROMPT_FINGERPRINT
+    PROMPT_FINGERPRINT = get_prompt_fingerprint()
 
     global TOKENIZER_PATH
     TOKENIZER_PATH = (
@@ -3163,39 +2579,11 @@ def main() -> int:
     table_batch_mode = normalize_table_batch_mode(
         args.table_batch_mode or config_table_batch_mode
     )
-    if table_batch_mode != "cell":
-        LOGGER.info(
-            "Table batch mode forced to cell (requested: %s)",
-            table_batch_mode,
-        )
-        table_batch_mode = "cell"
     glossary_max_terms = (
         config_glossary_max_terms
         if args.glossary_max_terms is None
         else max(0, args.glossary_max_terms)
     )
-    glossary_max_pairs = (
-        config_glossary_max_pairs
-        if args.glossary_max_pairs is None
-        else max(0, args.glossary_max_pairs)
-    )
-    glossary_path = args.glossary_path or config_glossary_path
-    max_tokens_limit = (
-        config_max_tokens if args.max_tokens is None else max(64, args.max_tokens)
-    )
-    max_context_tokens = (
-        config_max_context_tokens
-        if args.max_context_tokens is None
-        else max(256, args.max_context_tokens)
-    )
-    max_chars = (
-        config_max_chars if args.max_chars is None else max(0, args.max_chars)
-    )
-    global SOURCE_LANG, TARGET_LANG, MAX_CONTEXT_TOKENS
-    SOURCE_LANG = args.source_lang
-    TARGET_LANG = args.target_lang
-    MAX_CONTEXT_TOKENS = max_context_tokens
-
     configured_workers = config_pool_max_workers or config_qps or 1
     workers = (
         configured_workers
@@ -3208,111 +2596,17 @@ def main() -> int:
     if persistent_cache is not None:
         LOGGER.info("Persistent cache enabled: %s", cache_path)
 
-    glossary_pairs = load_glossary_pairs(
-        glossary_path,
-        args.source_lang,
-        args.target_lang,
-        glossary_max_pairs,
-    )
-    glossary_pairs_context = build_glossary_pairs_context(glossary_pairs)
-    glossary_terms = (
-        extract_glossary_terms(content, glossary_max_terms)
-        if glossary_max_terms > 0
-        else []
-    )
-    glossary_context = combine_glossary_context(
-        glossary_pairs_context,
-        build_glossary_context(glossary_terms),
-    )
-
-    style_mode = (args.style_mode or config_style_mode).strip().lower()
-    if style_mode not in {"auto", "fixed", "off"}:
-        style_mode = DEFAULT_STYLE_MODE
-    style_value = normalize_style(args.style or config_style_value)
-    style_probe_chars = (
-        config_style_probe_chars
-        if args.style_probe_chars is None
-        else max(0, args.style_probe_chars)
-    )
-    if style_mode == "auto":
-        sample = extract_probe_text(content, args.source_lang, style_probe_chars)
-        style_value = detect_translation_style(
-            sample,
-            args.source_lang,
-            args.target_lang,
-            args.model,
-            args.url,
-            args.api_key,
-        )
-        LOGGER.info("Auto style detected: %s", style_value)
-    if style_mode != "off":
-        style_instruction = build_style_instruction(style_value)
-        if CUSTOM_SYSTEM_PROMPT:
-            CUSTOM_SYSTEM_PROMPT = f"{CUSTOM_SYSTEM_PROMPT}\n{style_instruction}"
-        else:
-            CUSTOM_SYSTEM_PROMPT = style_instruction
-        LOGGER.info("Style instruction enabled")
-
-    prompt_strategy = (args.prompt_strategy or config_prompt_strategy).strip().lower()
-    if prompt_strategy not in {"auto", "full", "minimal"}:
-        prompt_strategy = DEFAULT_PROMPT_STRATEGY
-    if prompt_strategy == "minimal":
-        PROMPT_TEMPLATE = MIN_PROMPT_TEMPLATE
-        LOGGER.info("Prompt strategy: minimal")
-    elif prompt_strategy == "auto":
-        chosen = select_prompt_strategy(
-            prompt_strategy,
-            content,
-            args.source_lang,
-            args.target_lang,
-            args.model,
-            args.url,
-            args.api_key,
-            max_tokens_limit,
-            glossary_context,
-        )
-        if chosen == "minimal":
-            PROMPT_TEMPLATE = MIN_PROMPT_TEMPLATE
-        LOGGER.info("Prompt strategy: %s", chosen)
-        prompt_strategy = chosen
-    else:
-        LOGGER.info("Prompt strategy: full")
-    PROMPT_FINGERPRINT = get_prompt_fingerprint()
-
-    if max_chars <= 0:
-        auto_max_chars, auto_max_tokens, overhead, ratio = infer_auto_limits(
-            content,
-            args.source_lang,
-            args.target_lang,
-            max_context_tokens,
-            max_tokens_limit,
-            glossary_context,
-        )
-        max_chars = auto_max_chars
-        max_tokens_limit = auto_max_tokens
-        LOGGER.info(
-            "Auto max chars: %d (context=%d prompt_tokens=%d chars/token=%.2f)",
-            max_chars,
-            max_context_tokens,
-            overhead,
-            ratio,
-        )
-
     inferred_max_tokens = infer_max_tokens_from_chars(
-        max_chars,
+        args.max_chars,
         args.source_lang,
         args.target_lang,
     )
-    inferred_max_tokens = min(inferred_max_tokens, max_tokens_limit)
     LOGGER.info("Inferred max tokens per request: %d", inferred_max_tokens)
 
-    whole_file_max_tokens = min(
-        max_tokens_limit,
-        infer_max_tokens_from_chars(
-            max(max_chars, len(content)),
-            args.source_lang,
-            args.target_lang,
-        ),
+    whole_file_max_tokens = infer_max_tokens_from_chars(
+        max(args.max_chars, len(content)),
+        args.source_lang,
+        args.target_lang,
     )
     if whole_file_max_tokens != inferred_max_tokens:
         LOGGER.info("Whole-file inferred max tokens: %d", whole_file_max_tokens)
@@ -3322,6 +2616,12 @@ def main() -> int:
         if workers != 1:
             LOGGER.info("--whole-file ignores --pool-max-workers")
         try:
+            glossary_terms = (
+                extract_glossary_terms(content, glossary_max_terms)
+                if glossary_max_terms > 0
+                else []
+            )
+            glossary_context = build_glossary_context(glossary_terms)
             translated = translate_whole_file(
                 content,
                 args.source_lang,
@@ -3354,7 +2654,7 @@ def main() -> int:
                 args.model,
                 args.url,
                 args.api_key,
-                max_chars,
+                args.max_chars,
                 inferred_max_tokens,
                 workers,
                 short_row_tokens,
@@ -3372,7 +2672,7 @@ def main() -> int:
             args.model,
             args.url,
             args.api_key,
-            max_chars,
+            args.max_chars,
             inferred_max_tokens,
             workers,
             short_row_tokens,
