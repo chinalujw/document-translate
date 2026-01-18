@@ -1,9 +1,0 @@
-<bos>
-<start_of_turn>user
-Translate {source_label} ({source_lang}) to {target_label} ({target_lang}).
-Output only the {target_label} translation.
-Keep tokens like __PH__<number>__ unchanged.
-
-{text}
-<end_of_turn>
-<start_of_turn>model

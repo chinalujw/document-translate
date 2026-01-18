@@ -2,93 +2,84 @@
 
 支持语言（WMT24++ 55 种）
 
-语言代码参考 ISO 639-1：https://en.wikipedia.org/wiki/ISO_639-1  
-TranslateGemma 论文表 1：https://aclanthology.org/2025.findings-acl.634.pdf
+语言代码参考（ISO 639-1）：
+```
+https://en.wikipedia.org/wiki/ISO_639-1
+```
 
-<table>
-  <thead>
-    <tr>
-      <th>代码</th>
-      <th>语言</th>
-      <th>地区</th>
-      <th>类别</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr><td>cs_CZ</td><td>捷克语</td><td>捷克</td><td>WMT24 原有</td></tr>
-    <tr><td>de_DE</td><td>德语</td><td>德国</td><td>WMT24 原有</td></tr>
-    <tr><td>es_MX</td><td>西班牙语</td><td>墨西哥</td><td>WMT24 原有</td></tr>
-    <tr><td>hi_IN</td><td>印地语</td><td>印度</td><td>WMT24 原有</td></tr>
-    <tr><td>ja_JP</td><td>日语</td><td>日本</td><td>WMT24 原有</td></tr>
-    <tr><td>ru_RU</td><td>俄语</td><td>俄罗斯</td><td>WMT24 原有</td></tr>
-    <tr><td>uk_UA</td><td>乌克兰语</td><td>乌克兰</td><td>WMT24 原有</td></tr>
-    <tr><td>zh_CN</td><td>中文（普通话）</td><td>中国</td><td>WMT24 原有</td></tr>
-    <tr><td>ar_EG</td><td>阿拉伯语</td><td>埃及</td><td>新增</td></tr>
-    <tr><td>ar_SA</td><td>阿拉伯语</td><td>沙特</td><td>新增</td></tr>
-    <tr><td>bg_BG</td><td>保加利亚语</td><td>保加利亚</td><td>新增</td></tr>
-    <tr><td>bn_IN</td><td>孟加拉语</td><td>印度</td><td>新增</td></tr>
-    <tr><td>ca_ES</td><td>加泰罗尼亚语</td><td>西班牙</td><td>新增</td></tr>
-    <tr><td>da_DK</td><td>丹麦语</td><td>丹麦</td><td>新增</td></tr>
-    <tr><td>el_GR</td><td>希腊语</td><td>希腊</td><td>新增</td></tr>
-    <tr><td>et_EE</td><td>爱沙尼亚语</td><td>爱沙尼亚</td><td>新增</td></tr>
-    <tr><td>fa_IR</td><td>波斯语</td><td>伊朗</td><td>新增</td></tr>
-    <tr><td>fi_FI</td><td>芬兰语</td><td>芬兰</td><td>新增</td></tr>
-    <tr><td>fil_PH</td><td>菲律宾语</td><td>菲律宾</td><td>新增</td></tr>
-    <tr><td>fr_CA</td><td>法语</td><td>加拿大</td><td>新增</td></tr>
-    <tr><td>fr_FR</td><td>法语</td><td>法国</td><td>新增</td></tr>
-    <tr><td>gu_IN</td><td>古吉拉特语</td><td>印度</td><td>新增</td></tr>
-    <tr><td>he_IL</td><td>希伯来语</td><td>以色列</td><td>新增</td></tr>
-    <tr><td>hr_HR</td><td>克罗地亚语</td><td>克罗地亚</td><td>新增</td></tr>
-    <tr><td>hu_HU</td><td>匈牙利语</td><td>匈牙利</td><td>新增</td></tr>
-    <tr><td>id_ID</td><td>印度尼西亚语</td><td>印度尼西亚</td><td>新增</td></tr>
-    <tr><td>it_IT</td><td>意大利语</td><td>意大利</td><td>新增</td></tr>
-    <tr><td>kn_IN</td><td>卡纳达语</td><td>印度</td><td>新增</td></tr>
-    <tr><td>ko_KR</td><td>韩语</td><td>韩国</td><td>新增</td></tr>
-    <tr><td>lt_LT</td><td>立陶宛语</td><td>立陶宛</td><td>新增</td></tr>
-    <tr><td>lv_LV</td><td>拉脱维亚语</td><td>拉脱维亚</td><td>新增</td></tr>
-    <tr><td>ml_IN</td><td>马拉雅拉姆语</td><td>印度</td><td>新增</td></tr>
-    <tr><td>mr_IN</td><td>马拉地语</td><td>印度</td><td>新增</td></tr>
-    <tr><td>nl_NL</td><td>荷兰语</td><td>荷兰</td><td>新增</td></tr>
-    <tr><td>no_NO</td><td>挪威语</td><td>挪威</td><td>新增</td></tr>
-    <tr><td>pa_IN</td><td>旁遮普语</td><td>印度</td><td>新增</td></tr>
-    <tr><td>pl_PL</td><td>波兰语</td><td>波兰</td><td>新增</td></tr>
-    <tr><td>pt_BR</td><td>葡萄牙语</td><td>巴西</td><td>新增</td></tr>
-    <tr><td>pt_PT</td><td>葡萄牙语</td><td>葡萄牙</td><td>新增</td></tr>
-    <tr><td>ro_RO</td><td>罗马尼亚语</td><td>罗马尼亚</td><td>新增</td></tr>
-    <tr><td>sk_SK</td><td>斯洛伐克语</td><td>斯洛伐克</td><td>新增</td></tr>
-    <tr><td>sl_SI</td><td>斯洛文尼亚语</td><td>斯洛文尼亚</td><td>新增</td></tr>
-    <tr><td>sr_RS</td><td>塞尔维亚语</td><td>塞尔维亚</td><td>新增</td></tr>
-    <tr><td>sv_SE</td><td>瑞典语</td><td>瑞典</td><td>新增</td></tr>
-    <tr><td>sw_KE</td><td>斯瓦希里语</td><td>肯尼亚</td><td>新增</td></tr>
-    <tr><td>sw_TZ</td><td>斯瓦希里语</td><td>坦桑尼亚</td><td>新增</td></tr>
-    <tr><td>ta_IN</td><td>泰米尔语</td><td>印度</td><td>新增</td></tr>
-    <tr><td>te_IN</td><td>泰卢固语</td><td>印度</td><td>新增</td></tr>
-    <tr><td>th_TH</td><td>泰语</td><td>泰国</td><td>新增</td></tr>
-    <tr><td>tr_TR</td><td>土耳其语</td><td>土耳其</td><td>新增</td></tr>
-    <tr><td>ur_PK</td><td>乌尔都语</td><td>巴基斯坦</td><td>新增</td></tr>
-    <tr><td>vi_VN</td><td>越南语</td><td>越南</td><td>新增</td></tr>
-    <tr><td>zh_TW</td><td>中文（普通话）</td><td>台湾</td><td>新增</td></tr>
-    <tr><td>zu_ZA</td><td>祖鲁语</td><td>南非</td><td>新增</td></tr>
-  </tbody>
-</table>
+TranslateGemma 模型页（Ollama）：
+```
+https://ollama.com/library/translategemma
+```
+
+支持语言列表（更易读版）
+
+| 代码 | 语言 | 地区 | 类别 |
+| --- | --- | --- | --- |
+| cs_CZ | 捷克语 | 捷克 | WMT24 原有 |
+| de_DE | 德语 | 德国 | WMT24 原有 |
+| es_MX | 西班牙语 | 墨西哥 | WMT24 原有 |
+| hi_IN | 印地语 | 印度 | WMT24 原有 |
+| ja_JP | 日语 | 日本 | WMT24 原有 |
+| ru_RU | 俄语 | 俄罗斯 | WMT24 原有 |
+| uk_UA | 乌克兰语 | 乌克兰 | WMT24 原有 |
+| zh_CN | 中文（简体） | 中国 | WMT24 原有 |
+| ar_EG | 阿拉伯语 | 埃及 | 新增 |
+| ar_SA | 阿拉伯语 | 沙特 | 新增 |
+| bg_BG | 保加利亚语 | 保加利亚 | 新增 |
+| bn_IN | 孟加拉语 | 印度 | 新增 |
+| ca_ES | 加泰罗尼亚语 | 西班牙 | 新增 |
+| da_DK | 丹麦语 | 丹麦 | 新增 |
+| el_GR | 希腊语 | 希腊 | 新增 |
+| et_EE | 爱沙尼亚语 | 爱沙尼亚 | 新增 |
+| fa_IR | 波斯语 | 伊朗 | 新增 |
+| fi_FI | 芬兰语 | 芬兰 | 新增 |
+| fil_PH | 菲律宾语 | 菲律宾 | 新增 |
+| fr_CA | 法语 | 加拿大 | 新增 |
+| fr_FR | 法语 | 法国 | 新增 |
+| gu_IN | 古吉拉特语 | 印度 | 新增 |
+| he_IL | 希伯来语 | 以色列 | 新增 |
+| hr_HR | 克罗地亚语 | 克罗地亚 | 新增 |
+| hu_HU | 匈牙利语 | 匈牙利 | 新增 |
+| id_ID | 印度尼西亚语 | 印度尼西亚 | 新增 |
+| it_IT | 意大利语 | 意大利 | 新增 |
+| kn_IN | 卡纳达语 | 印度 | 新增 |
+| ko_KR | 韩语 | 韩国 | 新增 |
+| lt_LT | 立陶宛语 | 立陶宛 | 新增 |
+| lv_LV | 拉脱维亚语 | 拉脱维亚 | 新增 |
+| ml_IN | 马拉雅拉姆语 | 印度 | 新增 |
+| mr_IN | 马拉地语 | 印度 | 新增 |
+| nl_NL | 荷兰语 | 荷兰 | 新增 |
+| no_NO | 挪威语 | 挪威 | 新增 |
+| pa_IN | 旁遮普语 | 印度 | 新增 |
+| pl_PL | 波兰语 | 波兰 | 新增 |
+| pt_BR | 葡萄牙语 | 巴西 | 新增 |
+| pt_PT | 葡萄牙语 | 葡萄牙 | 新增 |
+| ro_RO | 罗马尼亚语 | 罗马尼亚 | 新增 |
+| sk_SK | 斯洛伐克语 | 斯洛伐克 | 新增 |
+| sl_SI | 斯洛文尼亚语 | 斯洛文尼亚 | 新增 |
+| sr_RS | 塞尔维亚语 | 塞尔维亚 | 新增 |
+| sv_SE | 瑞典语 | 瑞典 | 新增 |
+| sw_KE | 斯瓦希里语 | 肯尼亚 | 新增 |
+| sw_TZ | 斯瓦希里语 | 坦桑尼亚 | 新增 |
+| ta_IN | 泰米尔语 | 印度 | 新增 |
+| te_IN | 泰卢固语 | 印度 | 新增 |
+| th_TH | 泰语 | 泰国 | 新增 |
+| tr_TR | 土耳其语 | 土耳其 | 新增 |
+| ur_PK | 乌尔都语 | 巴基斯坦 | 新增 |
+| vi_VN | 越南语 | 越南 | 新增 |
+| zh_TW | 中文（繁体） | 台湾 | 新增 |
+| zu_ZA | 祖鲁语 | 南非 | 新增 |
 
 注：论文另提及 WMT24 的冰岛语，但未给出代码。
-
-官方信息（TranslateGemma / Ollama）
-
-- 官方页面（模型介绍、Prompt 格式、支持语言列表）：见 TranslateGemma 模型页。citeturn0search0
-- 模型元数据中的 `gemma3.context_length` 为 131072（Ollama 元数据），但这只是**模型标称上下文上限**，实际能否在 vLLM 中使用取决于 `max_model_len` 与显存。citeturn0search1turn0search6
-- vLLM 的 `max_model_len` 是“输入+输出”的上下文上限参数，未指定时会基于模型配置自动推导。citeturn0search6
-
-建议：在 24G 单卡上不要直接把 `max_model_len` 设置到 131072，而是以你当前 vLLM 启动日志或 `max_model_len` 配置为准，逐步调高并观察显存与稳定性。
 
 部署与使用（简化）
 
 1. 启动服务
 
    ```bash
-   docker compose build translategemma
-   docker compose up -d translategemma
+   docker compose -f docker/docker-compose-12b.yml build translategemma
+   docker compose -f docker/docker-compose-12b.yml up -d translategemma
    ```
 
 2. 简单 curl 示例
@@ -126,7 +117,16 @@ TranslateGemma 论文表 1：https://aclanthology.org/2025.findings-acl.634.pdf
    - 必须指定 `--source-lang`
    - 代码块/行内代码/HTML/LaTeX/图片标签会被保护
    - 标题/列表/表格结构保持不变
-   - 可用 `--max-chars` 合并段落、`--max-tokens` 限制输出
+   - `--max-chars` 控制分块长度（0=自动计算，默认自动）
+   - `--max-tokens` 控制单次输出上限（默认走配置）
+   - `--pool-max-workers` 控制客户端并发请求数（仅分块模式生效；整文件模式会忽略）
+
+   示例（自动风格判定）：
+
+   ```bash
+   python translate_markdown.py -i data/input.md -o data/output_translated.md \
+     --source-lang eng --target-lang zh-Hans --style-mode auto
+   ```
 
 **translate_markdown.py 实现要点**
 

@@ -1,0 +1,27 @@
+[project]
+name = "translategemma"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+  "transformers",
+  "sentencepiece",
+]
+
+[tool.translategemma.paths]
+tokenizer_path = "/data/.cache/modelscope/hub/models/google/translategemma-12b-it"
+cache_path = ".translategemma_cache.sqlite3"
+
+[tool.translategemma]
+short_row_tokens = 0
+table_context_rows = 0
+min_cell_tokens = 64
+table_batch_mode = "cell"
+glossary_max_terms = 80
+max_tokens = 1000
+max_chars = 0
+max_context_tokens = 6586
+pool_max_workers = 10
+
+[tool.translategemma.cache]
+enabled = true
+path = ".translategemma_cache.sqlite3"

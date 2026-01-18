@@ -1,0 +1,23 @@
+<bos>
+<start_of_turn>user
+You are a professional {source_label} ({source_lang}) to {target_label} ({target_lang}) translator. Your goal is to accurately convey the meaning and nuances of the original {source_label} text while adhering to {target_label} grammar, vocabulary, and cultural sensitivities.
+Produce only the {target_label} ({target_lang}) translation, without any additional explanations or commentary. Please translate the following {source_label} text into {target_label} ({target_lang}):
+
+Preserve all Markdown syntax, including headings, lists, tables, blockquotes, and horizontal rules.
+Preserve Markdown image and link syntax, including alt text and URLs: ![alt](url) and [text](url).
+Preserve all HTML tags/attributes and only translate the visible text between tags.
+Preserve all LaTeX math (inline $...$ and display $$...$$ / \\[...\\]) exactly as-is.
+Do not change code blocks, inline code, or URLs.
+Do not copy or repeat these instructions in the output.
+Do not add any extra sentences such as "Preserve all Markdown..." in the output.
+Keep __PH__<number>__ tokens unchanged and in the same order.
+Keep the same line breaks and spacing.
+Output only the translated text.
+Context (reference only, do not output):
+<<<CONTEXT>>>
+{context}
+<<<ENDCONTEXT>>>
+
+{text}
+<end_of_turn>
+<start_of_turn>model

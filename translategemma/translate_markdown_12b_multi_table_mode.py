@@ -1,6 +1,5 @@
 import argparse
 import concurrent.futures
-import csv
 import hashlib
 import http.client
 import json
@@ -27,171 +26,22 @@ PROMPT_LEAK_PATTERNS = (
     "Preserve all Markdown",
     "Do not copy or repeat these instructions",
     "Do not add any extra sentences",
-    "AI翻译专家",
-)
-PROMPT_LEAK_STRONG_MARKERS = (
-    "<<<CONTEXT>>>",
-    "<<<ENDCONTEXT>>>",
-    "<start_of_turn>",
-    "<end_of_turn>",
-    "<bos>",
 )
 
 
 def contains_prompt_leak(text: str) -> bool:
     if not text:
         return False
-    if any(marker in text for marker in PROMPT_LEAK_STRONG_MARKERS):
-        return True
-    hits = sum(1 for marker in PROMPT_LEAK_PATTERNS if marker in text)
-    return hits >= 2
-
-
-def extract_probe_text(content: str, source_lang: str, max_chars: int = 600) -> str:
-    lines = content.splitlines()
-    in_fence = False
-    collected: list[str] = []
-    total = 0
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("```"):
-            in_fence = not in_fence
-            continue
-        if in_fence:
-            continue
-        if not should_translate_text(line, source_lang, strip_tags=True):
-            continue
-        collected.append(line)
-        total += len(line)
-        if total >= max_chars:
-            break
-    return "\n".join(collected).strip()
-
-
-def normalize_style(value: str) -> str:
-    if not value:
-        return DEFAULT_STYLE
-    value = value.strip().lower()
-    allowed = {
-        "technical",
-        "general",
-        "formal",
-        "casual",
-        "marketing",
-        "legal",
-        "academic",
-    }
-    return value if value in allowed else DEFAULT_STYLE
-
-
-def detect_translation_style(
-    sample_text: str,
-    source_lang: str,
-    target_lang: str,
-    model: str,
-    url: str,
-    api_key: str,
-) -> str:
-    if not sample_text:
-        return DEFAULT_STYLE
-    completion_url = url.replace("/v1/chat/completions", "/v1/completions")
-    prompt = (
-        "Choose the best translation style for this document. "
-        "Reply with a single word from: TECHNICAL, GENERAL, FORMAL, CASUAL, "
-        "MARKETING, LEGAL, ACADEMIC.\n"
-        f"Source: {source_lang}\nTarget: {target_lang}\n"
-        "Sample:\n<<<TEXT>>>\n"
-        f"{sample_text}\n"
-        "<<<END>>>\n"
-    )
-    payload = {
-        "model": model,
-        "prompt": prompt,
-        "max_tokens": 32,
-        "temperature": 0.0,
-        "stop": ["\n"],
-    }
-    try:
-        response = post_request(completion_url, payload, api_key)
-        text = response["choices"][0]["text"].strip().lower()
-        return normalize_style(text)
-    except Exception as exc:
-        LOGGER.warning("Style detection failed; using default style: %s", exc)
-        return DEFAULT_STYLE
-
-
-def build_style_instruction(style: str) -> str:
-    style = normalize_style(style)
-    return f"Use a consistent, professional {style} translation style."
-
-
-def select_prompt_strategy(
-    strategy: str,
-    content: str,
-    source_lang: str,
-    target_lang: str,
-    model: str,
-    url: str,
-    api_key: str,
-    max_tokens: int,
-    glossary_context: str,
-) -> str:
-    if strategy != "auto":
-        return strategy
-    global _PROMPT_STRATEGY_CACHE
-    if _PROMPT_STRATEGY_CACHE:
-        return _PROMPT_STRATEGY_CACHE
-    probe_text = extract_probe_text(content, source_lang)
-    if not probe_text:
-        return "full"
-    local_cache: dict[str, str] = {}
-    try:
-        global PROMPT_TEMPLATE
-        original_template = PROMPT_TEMPLATE
-        PROMPT_TEMPLATE = original_template
-        try:
-            translated, _ = translate_segment_with_meta(
-                probe_text,
-                source_lang,
-                target_lang,
-                model,
-                url,
-                api_key,
-                local_cache,
-                threading.Lock(),
-                None,
-                glossary_context,
-                min(256, max_tokens),
-            )
-        except Exception as exc:
-            LOGGER.warning("Prompt strategy probe failed; using full: %s", exc)
-            return "full"
-        if contains_prompt_leak(translated):
-            _PROMPT_STRATEGY_CACHE = "minimal"
-            return "minimal"
-        _PROMPT_STRATEGY_CACHE = "full"
-        return "full"
-    finally:
-        PROMPT_TEMPLATE = original_template
+    for marker in PROMPT_LEAK_PATTERNS:
+        if marker in text:
+            return True
+    return False
 PROMPT_TEMPLATE: str | None = None
 CUSTOM_SYSTEM_PROMPT = ""
-_PROMPT_STRATEGY_CACHE: str | None = None
 DEFAULT_PROMPT_TEMPLATE_PATH = os.path.join(
     os.path.dirname(__file__),
     "prompt_templates",
     "translate_gemma_12b.txt",
-)
-MIN_PROMPT_TEMPLATE = (
-    "<bos>\n"
-    "<start_of_turn>user\n"
-    "Translate {source_label} ({source_lang}) to {target_label} ({target_lang}). "
-    "Output only the {target_label} translation.\n"
-    "Keep Markdown/HTML/LaTeX as-is. Only translate visible text.\n\n"
-    "{custom_prompt}\n\n"
-    "{context}\n\n"
-    "{text}\n"
-    "<end_of_turn>\n"
-    "<start_of_turn>model\n"
 )
 DEFAULT_TIMEOUT = 60
 DEFAULT_MAX_TOKENS = 1024
@@ -204,12 +54,7 @@ DEFAULT_GLOSSARY_MAX_TERMS = 0
 DEFAULT_CACHE_PATH = ".translategemma_cache.sqlite3"
 DEFAULT_CACHE_ENABLED = False
 DEFAULT_MIN_CELL_TOKENS = 0
-DEFAULT_TABLE_BATCH_MODE = "cell"
-DEFAULT_PROMPT_STRATEGY = "auto"
-DEFAULT_STYLE_MODE = "auto"
-DEFAULT_STYLE = "technical"
-DEFAULT_STYLE_PROBE_CHARS = 600
-DEFAULT_GLOSSARY_MAX_PAIRS = 200
+DEFAULT_TABLE_BATCH_MODE = "table"
 DEFAULT_ROW_RAW_MIN_TOKENS = 120
 TOKENIZER_PATH: str | None = None
 _TRANSFORMERS_TOKENIZER: Any | None = None
@@ -387,62 +232,6 @@ def build_glossary_context(terms: list[str]) -> str:
         return ""
     joined = ", ".join(terms)
     return f"Glossary (keep identifiers unchanged): {joined}"
-
-
-def load_glossary_pairs(
-    path: str, source_lang: str, target_lang: str, max_pairs: int
-) -> list[tuple[str, str]]:
-    if not path:
-        return []
-    if not os.path.exists(path):
-        LOGGER.warning("Glossary file not found: %s", path)
-        return []
-    pairs: list[tuple[str, str]] = []
-    delimiter = "\t" if path.endswith(".tsv") else ","
-    try:
-        with open(path, "r", encoding="utf-8-sig", newline="") as f:
-            reader = csv.reader(f, delimiter=delimiter)
-            rows = list(reader)
-    except Exception as exc:
-        LOGGER.warning("Failed to read glossary file: %s", exc)
-        return []
-    if not rows:
-        return []
-    header = [cell.strip().lower() for cell in rows[0]]
-    has_header = {"source", "target", "source_lang", "target_lang"}.issubset(
-        set(header)
-    )
-    start_idx = 1 if has_header else 0
-    for row in rows[start_idx:]:
-        if len(row) < 4:
-            continue
-        src_lang = row[0].strip()
-        tgt_lang = row[1].strip()
-        src_text = row[2].strip()
-        tgt_text = row[3].strip()
-        if not src_text or not tgt_text:
-            continue
-        if src_lang.lower() != source_lang.lower():
-            continue
-        if tgt_lang.lower() != target_lang.lower():
-            continue
-        pairs.append((src_text, tgt_text))
-        if len(pairs) >= max_pairs:
-            break
-    return pairs
-
-
-def build_glossary_pairs_context(pairs: list[tuple[str, str]]) -> str:
-    if not pairs:
-        return ""
-    lines = [f"{src} => {tgt}" for src, tgt in pairs]
-    return "Glossary (use exact mappings):\n" + "\n".join(lines)
-
-
-def combine_glossary_context(pairs_ctx: str, terms_ctx: str) -> str:
-    if pairs_ctx and terms_ctx:
-        return f"{pairs_ctx}\n\n{terms_ctx}"
-    return pairs_ctx or terms_ctx
 
 
 def build_context_text(title: str, glossary: str) -> str:
@@ -713,16 +502,7 @@ def infer_auto_limits(
         source_lang, target_lang, glossary_context
     )
     safety_tokens = 64
-    available = max_context_tokens - overhead - safety_tokens
-    if available <= 0:
-        LOGGER.warning(
-            "Prompt overhead exceeds context; reducing input/output budget (overhead=%d context=%d)",
-            overhead,
-            max_context_tokens,
-        )
-        ratio = estimate_chars_per_token("", source_lang)
-        return 64, 1, overhead, ratio
-    output_tokens = min(max_tokens_hint, available)
+    output_tokens = min(max_tokens_hint, max_context_tokens - overhead - safety_tokens)
     output_tokens = max(64, output_tokens)
     input_budget = max_context_tokens - overhead - output_tokens - safety_tokens
     if input_budget < 64:
@@ -931,7 +711,21 @@ def resolve_custom_prompt(value: str | None) -> str:
 
 
 def estimate_tokens(text: str) -> int:
-    tokenizer = get_transformers_tokenizer()
+    try:
+        tokenizer = get_transformers_tokenizer()
+    except RuntimeError:
+        tokenizer = None
+    if tokenizer is None:
+        global _TOKENIZER_FALLBACK_WARNING
+        if not _TOKENIZER_FALLBACK_WARNING:
+            LOGGER.warning(
+                "Tokenizer unavailable; falling back to character-based token estimate"
+            )
+            _TOKENIZER_FALLBACK_WARNING = True
+        stripped = strip_placeholders(text)
+        non_ascii = sum(1 for ch in stripped if ord(ch) > 127)
+        ascii_count = len(stripped) - non_ascii
+        return max(1, non_ascii + ascii_count // 4)
     return max(1, len(tokenizer.encode(text, add_special_tokens=False)))
 
 
@@ -1185,36 +979,6 @@ def translate_html_fragment(
     matches = list(row_pattern.finditer(fragment))
     if matches:
         rows = [match.group(1) for match in matches]
-        def translate_row_cells(row: str, context: str) -> str:
-            parts = re.split(r"(<[^>]+>)", row)
-            out_parts: list[str] = []
-            for part in parts:
-                if not part or part.startswith("<"):
-                    out_parts.append(part)
-                    continue
-                if not part.strip():
-                    out_parts.append(part)
-                    continue
-                with log_context("html_table:cell_text"):
-                    out_parts.append(
-                        translate_text_fragment(
-                            part,
-                            source_lang,
-                            target_lang,
-                            model,
-                            url,
-                            api_key,
-                            cache,
-                            cache_lock,
-                            persistent_cache,
-                            context,
-                            max_tokens,
-                        )
-                    )
-            return "".join(out_parts)
-
-        if table_batch_mode == "cell":
-            return "".join(translate_row_cells(row, base_context) for row in rows)
         if table_batch_mode == "table":
             input_tokens = estimate_tokens(fragment)
             output_tokens = estimate_output_tokens(
@@ -1961,42 +1725,6 @@ def translate_markdown_table_fragment(
 
     if not row_lines:
         return fragment
-
-    def translate_row_cells(row: str, context: str) -> str:
-        cells = row.split("|")
-        out_cells = list(cells)
-        for cell_idx in range(1, max(1, len(cells) - 1)):
-            cell = cells[cell_idx]
-            if not cell.strip():
-                continue
-            leading = re.match(r"\s*", cell).group(0)
-            trailing = re.search(r"\s*$", cell).group(0)
-            inner = cell[len(leading) : len(cell) - len(trailing)]
-            if not inner:
-                continue
-            if not should_translate_text(inner, source_lang, strip_tags=True):
-                continue
-            with log_context("md_table:cell_text"):
-                translated = translate_text_fragment(
-                    inner,
-                    source_lang,
-                    target_lang,
-                    model,
-                    url,
-                    api_key,
-                    cache,
-                    cache_lock,
-                    persistent_cache,
-                    context,
-                    max_tokens,
-                )
-            out_cells[cell_idx] = f"{leading}{translated}{trailing}"
-        return "|".join(out_cells)
-
-    if table_batch_mode == "cell":
-        for row_idx, row in zip(row_indices, row_lines):
-            lines[row_idx] = translate_row_cells(row, base_context)
-        return "".join(lines)
 
     patterns = [
         re.compile(r"`+[^`]*?`+"),
@@ -3069,41 +2797,12 @@ def main() -> int:
     parser.add_argument(
         "--table-batch-mode",
         choices=["table", "row", "cell"],
-        help="table batching mode for HTML/Markdown tables (only cell is supported)",
-    )
-    parser.add_argument(
-        "--prompt-strategy",
-        choices=["auto", "full", "minimal"],
-        help="prompt strategy for LLM (auto|full|minimal)",
-    )
-    parser.add_argument(
-        "--style-mode",
-        choices=["auto", "fixed", "off"],
-        help="translation style selection (auto|fixed|off)",
-    )
-    parser.add_argument(
-        "--style",
-        help="translation style when --style-mode=fixed "
-        "(technical|general|formal|casual|marketing|legal|academic)",
-    )
-    parser.add_argument(
-        "--style-probe-chars",
-        type=int,
-        help="number of chars for style probe sample",
+        help="table batching mode for HTML/Markdown tables (table|row|cell)",
     )
     parser.add_argument(
         "--glossary-max-terms",
         type=int,
         help="max glossary terms to include as context (0 disables)",
-    )
-    parser.add_argument(
-        "--glossary-path",
-        help="glossary file path (csv/tsv) with columns: source_lang,target_lang,source,target",
-    )
-    parser.add_argument(
-        "--glossary-max-pairs",
-        type=int,
-        help="max glossary mapping pairs to include",
     )
     parser.add_argument("--cache-path", help="persistent translation cache path")
     parser.add_argument(
@@ -3157,10 +2856,6 @@ def main() -> int:
     config_tokenizer_path = config_paths.get("tokenizer_path", "") or config_section.get(
         "tokenizer_path", ""
     )
-    config_glossary_path = (
-        config_paths.get("glossary_path", "")
-        or config_section.get("glossary_path", "")
-    )
     config_short_row_tokens = read_int(
         config_section, "short_row_tokens", DEFAULT_SHORT_ROW_TOKENS
     )
@@ -3173,23 +2868,10 @@ def main() -> int:
     config_table_batch_mode = normalize_table_batch_mode(
         config_section.get("table_batch_mode", DEFAULT_TABLE_BATCH_MODE)
     )
-    config_prompt_strategy = (
-        config_section.get("prompt_strategy", DEFAULT_PROMPT_STRATEGY) or DEFAULT_PROMPT_STRATEGY
-    )
-    config_style_mode = (
-        config_section.get("style_mode", DEFAULT_STYLE_MODE) or DEFAULT_STYLE_MODE
-    )
-    config_style_value = config_section.get("style", DEFAULT_STYLE) or DEFAULT_STYLE
-    config_style_probe_chars = read_int(
-        config_section, "style_probe_chars", DEFAULT_STYLE_PROBE_CHARS
-    )
     config_pool_max_workers = read_int(config_section, "pool_max_workers", 0)
     config_qps = read_int(config_section, "qps", 0)
     config_glossary_max_terms = read_int(
         config_section, "glossary_max_terms", DEFAULT_GLOSSARY_MAX_TERMS
-    )
-    config_glossary_max_pairs = read_int(
-        config_section, "glossary_max_pairs", DEFAULT_GLOSSARY_MAX_PAIRS
     )
     config_max_tokens = read_int(config_section, "max_tokens", DEFAULT_MAX_TOKENS)
     config_max_chars = read_int(config_section, "max_chars", 0)
@@ -3211,6 +2893,7 @@ def main() -> int:
     if CUSTOM_SYSTEM_PROMPT:
         LOGGER.info("Custom system prompt enabled")
     global PROMPT_FINGERPRINT
+    PROMPT_FINGERPRINT = get_prompt_fingerprint()
 
     global TOKENIZER_PATH
     TOKENIZER_PATH = (
@@ -3237,23 +2920,11 @@ def main() -> int:
     table_batch_mode = normalize_table_batch_mode(
         args.table_batch_mode or config_table_batch_mode
     )
-    if table_batch_mode != "cell":
-        LOGGER.info(
-            "Table batch mode forced to cell (requested: %s)",
-            table_batch_mode,
-        )
-        table_batch_mode = "cell"
     glossary_max_terms = (
         config_glossary_max_terms
         if args.glossary_max_terms is None
         else max(0, args.glossary_max_terms)
     )
-    glossary_max_pairs = (
-        config_glossary_max_pairs
-        if args.glossary_max_pairs is None
-        else max(0, args.glossary_max_pairs)
-    )
-    glossary_path = args.glossary_path or config_glossary_path
     max_tokens_limit = (
         config_max_tokens if args.max_tokens is None else max(64, args.max_tokens)
     )
@@ -3282,76 +2953,12 @@ def main() -> int:
     if persistent_cache is not None:
         LOGGER.info("Persistent cache enabled: %s", cache_path)
 
-    glossary_pairs = load_glossary_pairs(
-        glossary_path,
-        args.source_lang,
-        args.target_lang,
-        glossary_max_pairs,
-    )
-    glossary_pairs_context = build_glossary_pairs_context(glossary_pairs)
     glossary_terms = (
         extract_glossary_terms(content, glossary_max_terms)
         if glossary_max_terms > 0
         else []
     )
-    glossary_context = combine_glossary_context(
-        glossary_pairs_context,
-        build_glossary_context(glossary_terms),
-    )
-
-    style_mode = (args.style_mode or config_style_mode).strip().lower()
-    if style_mode not in {"auto", "fixed", "off"}:
-        style_mode = DEFAULT_STYLE_MODE
-    style_value = normalize_style(args.style or config_style_value)
-    style_probe_chars = (
-        config_style_probe_chars
-        if args.style_probe_chars is None
-        else max(0, args.style_probe_chars)
-    )
-    if style_mode == "auto":
-        sample = extract_probe_text(content, args.source_lang, style_probe_chars)
-        style_value = detect_translation_style(
-            sample,
-            args.source_lang,
-            args.target_lang,
-            args.model,
-            args.url,
-            args.api_key,
-        )
-        LOGGER.info("Auto style detected: %s", style_value)
-    if style_mode != "off":
-        style_instruction = build_style_instruction(style_value)
-        if CUSTOM_SYSTEM_PROMPT:
-            CUSTOM_SYSTEM_PROMPT = f"{CUSTOM_SYSTEM_PROMPT}\n{style_instruction}"
-        else:
-            CUSTOM_SYSTEM_PROMPT = style_instruction
-        LOGGER.info("Style instruction enabled")
-
-    prompt_strategy = (args.prompt_strategy or config_prompt_strategy).strip().lower()
-    if prompt_strategy not in {"auto", "full", "minimal"}:
-        prompt_strategy = DEFAULT_PROMPT_STRATEGY
-    if prompt_strategy == "minimal":
-        PROMPT_TEMPLATE = MIN_PROMPT_TEMPLATE
-        LOGGER.info("Prompt strategy: minimal")
-    elif prompt_strategy == "auto":
-        chosen = select_prompt_strategy(
-            prompt_strategy,
-            content,
-            args.source_lang,
-            args.target_lang,
-            args.model,
-            args.url,
-            args.api_key,
-            max_tokens_limit,
-            glossary_context,
-        )
-        if chosen == "minimal":
-            PROMPT_TEMPLATE = MIN_PROMPT_TEMPLATE
-        LOGGER.info("Prompt strategy: %s", chosen)
-        prompt_strategy = chosen
-    else:
-        LOGGER.info("Prompt strategy: full")
-    PROMPT_FINGERPRINT = get_prompt_fingerprint()
+    glossary_context = build_glossary_context(glossary_terms)
 
     if max_chars <= 0:
         auto_max_chars, auto_max_tokens, overhead, ratio = infer_auto_limits(
@@ -3419,12 +3026,6 @@ def main() -> int:
                 )
             else:
                 raise
-            whole_file_success = False
-        except (http.client.RemoteDisconnected, TimeoutError, ConnectionError, OSError) as exc:
-            LOGGER.warning(
-                "Whole-file request failed (%s); falling back to chunked translation",
-                exc,
-            )
             whole_file_success = False
         if not whole_file_success:
             translated = translate_markdown(
